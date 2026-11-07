@@ -5,6 +5,81 @@
 
 ---
 
+## 0. 2026-11-08 Windows 端交付会话摘要（最新）
+
+本会话在 **Windows 10/11 x64（Administrator）** 上完成了遗留项的绝大部分：
+
+| 遗留项（原 §5.2） | 状态 |
+|---|---|
+| 1. M6 LSP 桥接 | ✅ **完成**。Spike 冻结 + 实现落地，真机 clangd 握手/hover/双通道隔离验证通过（见 §5.4 Spike 结论） |
+| 2. dmg 打包失败 | ⏸ 仍是 macOS 环境问题，与代码无关 |
+| 3. Windows 侧未验证 | ✅ **完成**：cargo 全量测试、凭据管理器（Credential Manager）往返、网卡枚举、WebView2 渲染、原生对话框、Monaco、打包（MSI + NSIS）、真机 SSH/SFTP/PTY/LSP 全链路 |
+| 4. §12.2 真机 8 项验收 | ✅ 自动化 3 项 + Windows UI 实机走查（指纹登记对话框/连接/会话）；克隆 Host Key、同 IP 抢占仍需第二台设备 |
+| 5. vite dev 首启竞态 | 未变（仅 dev） |
+| 6. CUA 偶发挂起 | Windows 上同样存在：控制器偶发 `independent_surface_requires_association` / `stopped`；恢复手段见 §5.6 |
+
+**修复的真实 Bug**：`SftpFileSystem::expand_path` 依赖 russh-sftp 的 `expand-path@openssh.com`
+扩展（标准 sftp-server 不宣告，恒返回 None）→ 改用标准 `SSH_FXP_REALPATH`
+（`canonicalize`）。症状：「打开文件」报「无法解析远程路径: .」。
+
+**Windows 打包**：`npm run tauri build` →
+`src-tauri/target/release/bundle/msi/Glance IDE_0.1.0_x64_en-US.msi` +
+`bundle/nsis/Glance IDE_0.1.0_x64-setup.exe`。构建依赖：NASM（aws-lc-sys），
+已写入用户 PATH（`%LOCALAPPDATA%\bin\NASM`）；NSIS 由 tauri 下载到
+`%LOCALAPPDATA%\tauri\NSIS`（本机 GitHub 直连超时，经 WSL 下载 zip 后手动解压为
+`NSIS/` 目录即可）。断网资源审计：dist 内无运行时外链（仅 license/RFC 字面量）。
+
+### 5.4 M6 LSP Spike 结论（§6.4 要求的冻结记录）
+
+**传输层：Tauri Channel 方案冻结。** 实测（Windows → Ubuntu 20.04 设备，
+`tests/lsp_bridge.rs`）：`lsp_open`（SSH exec 启动 clangd）≈180ms，
+`initialize` RTT ≈65ms（clangd 本地 reply 0ms，延迟被 SSH 设备 RTT 主导）。
+WebSocket 本机回环（~0.3ms）相比设备 RTT 可忽略，却引入监听端口/一次性令牌/
+防火墙弹窗/额外依赖——安全面（§6.4 三条硬性要求）与复杂度全部省去。
+实现：Rust 侧 JSON-RPC Content-Length 组帧/解帧（`app_services/lsp.rs` 的
+`FrameParser`，容忍分片/粘帧/前导噪声）+ SSH exec 无 PTY 字节透传（stderr 分离）；
+命令 `lsp_open/lsp_send/lsp_close`；会话断开/应用退出统一回收。
+
+**客户端：不引入 monaco-languageclient（决策记录）。** 其 8.x/9.x 强制依赖
+`@codingame/monaco-vscode-api` 全家桶并替换 vanilla Monaco，与本项目
+EditorHost/Model 架构冲突。前端直接消费 JSON-RPC JSON 消息，自建轻量桥
+（`src/lib/lsp/remoteLsp.ts`，约 600 行）：补全（含 snippet/textEdit/resolve 能力探测）、
+悬停（三形态 contents 归一化）、定义跳转（file:// ↔ remote:// 映射）、
+publishDiagnostics → Monaco markers、didOpen/didChange(全量+250ms 防抖)/didClose。
+缓存键（§6.5）：`device_identity_id + workspace_root + language_id`（控制器实例即上下文）。
+状态在 StatusBar 展示（ready/starting/failed 降级可见，§6.6）。
+
+**语言服务器候选**（前端 `SERVER_SPECS`）：cpp/c → clangd；python → pylsp →
+pyright-langserver --stdio（依次回退）。远程命令参数白名单校验（§6.4）。
+
+### 5.5 Windows 构建环境要求
+
+- Node 22+、Rust stable、MSVC Build Tools（VS18 Community 已装）、WebView2 Runtime
+- **NASM**（russh→aws-lc-sys 需要）：`winget install NASM.NASM`，加入 PATH
+- NSIS/WiX 由 tauri 自动下载（GitHub 不通时走 WSL 或代理下载后解压到 `%LOCALAPPDATA%\tauri\NSIS`）
+- `scripts/e2e-server/server.js` 在 Windows 上需
+  `GLANCE_E2E_SFTP_SERVER=linux:/usr/lib/openssh/sftp-server`（经 wsl.exe 直通；
+  注意 Git Bash 会转换路径形环境变量，必须用 `linux:` 前缀协议）
+- 测试命令（真机）：
+  ```bash
+  cd src-tauri
+  REAL_SSH_HOST=<ip> REAL_SSH_PORT=22 REAL_SSH_USER=<user> REAL_SSH_PASS=<pass> \
+    REAL_SSH_HOSTKEY_PUB=<pub> cargo test --test real_device --test lsp_bridge
+  cargo test --test windows_platform   # 仅 Windows 有意义
+  ```
+
+### 5.6 Windows CUA（UI 自动化）注意事项
+
+- 偶发 `independent_surface_requires_association`（物理输入被拒）与 `stopped`。
+- 观察（getAXState/截图）始终可用；物理输入被拒时重启控制器无效果，需新会话。
+- 已 UI 实机验证：应用启动/渲染、本地文件夹打开（原生对话框）、Monaco 语法高亮、
+  文件树、Profile 创建（含 Windows 凭据管理器存储说明）、连接 → 未知身份阻断对话框
+  （指纹三方一致核对）→ 登记并连接 → 会话绿灯。
+- 待 UI 复核（后端均已集成测试覆盖）：远程文件树浏览/编辑保存、终端 PTY、
+  任务运行、发现扫描、LSP hover/补全的实际操作手感。
+
+---
+
 ## 1. 项目概览
 
 **Glance IDE**：本地/远程一体化桌面开发工作台。Tauri 2 + React 19 + TypeScript + Rust，
@@ -19,17 +94,18 @@ PTY 终端、远程构建任务与错误跳转、局域网设备发现、远程�
 
 | 里程碑 | 状态 | 说明 |
 |---|---|---|
-| M0 技术验证 | ✅ | Monaco ESM+Worker 全离线；russh/russh-sftp/rusqlite 锁定 |
-| M1 本地编辑器 | ✅ | 文件树/多标签/Markdown 预览/Diff/全局搜索/ui_state 持久化 |
-| M2 SSH 设备池 | ✅ 核心 | 指纹计算与 ssh-keygen 一致；A/B/A 轮换；未知/变化阻断；Profile/Identity CRUD；Keychain |
-| M3 SFTP 远程工作区 | ✅ 核心 | 统一 Provider + URI 调度 + 会话内 SFTP 通道懒初始化 + 冲突检测 |
+| M0 技术验证 | ✅ | Monaco ESM+Worker 全离线；russh/russh-sftp/rusqlite 锁定；**Windows 编译通过** |
+| M1 本地编辑器 | ✅ | 文件树/多标签/Markdown 预览/Diff/全局搜索/ui_state 持久化；**Windows 渲染验证** |
+| M2 SSH 设备池 | ✅ 核心 | 指纹计算与 ssh-keygen 一致；A/B/A 轮换；未知/变化阻断；Profile/Identity CRUD；Keychain；**Windows 凭据管理器验证** |
+| M3 SFTP 远程工作区 | ✅ 核心 | 统一 Provider + URI 调度 + 会话内 SFTP 通道懒初始化 + 冲突检测；**canonicalize 修复后 Windows 真机验证** |
 | M4 终端与构建 | ✅ 核心 | PTY(xterm.js) + exec 任务(stdout/stderr 分离+ExitStatus) + Problem Matcher + 错误跳转 |
-| M5 局域网发现 | ✅ | mdns-sd + CIDR TCP 扫描（并发/超时/取消）+ SSH banner 分级 |
-| M6 远程语言智能 | 🔨 | 检测/工程识别/compile_commands 指纹完成；**LSP 桥接未做（见遗留 #1）** |
-| M7 打包发布 | ✅ | .app 产出 + Info.plist 本地网络声明注入脚本；dmg 受环境问题阻塞（见遗留 #2） |
+| M5 局域网发现 | ✅ | mdns-sd + CIDR TCP 扫描（并发/超时/取消）+ SSH banner 分级；**Windows 网卡枚举验证** |
+| M6 远程语言智能 | ✅ | 检测/工程识别/compile_commands 指纹 + **LSP 桥接完成**（§5.4 Spike 结论；真机 clangd 握手/hover/隔离通过） |
+| M7 打包发布 | ✅ | macOS .app + **Windows MSI + NSIS 安装包**；断网资源检查通过（两端） |
 
-**测试**：Rust 单元 32/32 · loopback 互操作 3/3 · **真机互操作 5/5**（Ubuntu 20.04 设备验证）
-· 前端 TS 严格模式构建全绿 · UI 走查（M2 轮屏幕操作）通过。
+**测试**：Rust 单元 37/37 · loopback 互操作 3/3 · 真机互操作 5/5（Ubuntu 20.04，Windows 客户端）
+· **LSP 桥真机 2/2** · **Windows 平台专项 3/3**（凭据管理器/中文密码/网卡）
+· 前端 TS 严格模式构建全绿 · UI 走查：macOS 全量；Windows 关键路径（见 §5.6）。
 
 **用户已实机复测反馈并修复的 6 项**：SSH 连不通/扫不到设备（macOS 本地网络权限根因，见 §5.1）、
 全屏切窗口布局丢失、Diff 方向、Markdown 预览交互（现为双按钮 + 全屏预览 + 浮动编辑抽屉）、
@@ -85,19 +161,17 @@ exec 回显（`stderr:` 前缀走 stderr、`exit N` 传退出码）、简单 PTY
   系统设置→隐私与安全性→本地网络 中允许应用。授权状态重置：`tccutil reset LocalNetwork com.glance.ide`。
 - SSH 客户端已对 `No route to host` 输出友好提示（`src-tauri/src/ssh/client.rs`）。
 
-### 5.2 遗留工作清单
-1. **M6 LSP 桥接**（下一个大项）：monaco-languageclient ↔ SSH stdio。路线图 §6.4 要求先做
-   Spike 冻结方案：本机 127.0.0.1 临时 WebSocket（随机端口+一次性令牌）vs Tauri Channel。
-   Rust 侧基础已备：`exec_capture`、会话管理、LSP 缓存键设计（§6.5）。
+### 5.2 遗留工作清单（2026-11-08 更新）
+1. ~~M6 LSP 桥接~~ ✅ 已完成（§5.4）。后续可选增强：completionItem/resolve 懒解析、
+   documentSymbol/重命名、增量 didChange、会话断线自动重开 LSP。
 2. **dmg 打包失败**：`bundle_dmg.sh` 报 Finder AppleEvent 超时（-1712），本机 Finder 脚本执行
    环境问题，与代码无关。.app 本身可靠产出；dmg 可换机器/重启 Finder 后重试。
-3. **Windows 侧全部未验证**：WebView2、Credential Manager（keyring windows-native）、路径差异。
-   M0/M7 的跨平台项需真 Windows 环境。
-4. **§12.2 真机 8 项验收**只自动化了前 3 行（空池/轮换/错误凭据）；克隆 Host Key 检测、
+3. ~~Windows 侧全部未验证~~ ✅ 已完成（§0/§5.5）。Windows 需补装 NASM（aws-lc-sys）。
+4. **§12.2 真机 8 项验收**：已自动化 3 项 + 单设备 UI 全流程；克隆 Host Key 检测、
    同 IP 抢占等 5 项需两台真实设备。
 5. vite dev 首启竞态：lockfile 变化后首次加载可能白屏（Re-optimizing 竞态），刷新即可；
    仅 dev 存在。
-6. 屏幕控制（CUA）权限代理在本机偶发挂起——UI 自动化验证不稳定，UI 回归建议人工执行。
+6. 屏幕控制（CUA）权限代理挂起：macOS/Windows 均存在（§5.6）。UI 回归建议人工执行。
 
 ### 5.3 踩坑速查（代码层面）
 | 坑 | 结论 |
