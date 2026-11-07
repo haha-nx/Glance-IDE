@@ -25,6 +25,8 @@ pub struct AppState {
     pub sessions: app_services::ssh_sessions::SessionManager,
     /// PTY 终端通道注册表（M4）
     pub terminals: Arc<app_services::terminal::TerminalRegistry>,
+    /// LSP 通道注册表（M6，§6.4）
+    pub lsp: Arc<app_services::lsp::LspRegistry>,
     /// 等待用户确认的握手观测密钥（fingerprint → 观测记录），
     /// 在 approve_identity 时消费用于持久化公钥 blob
     pub pending_keys: StdMutex<PendingKeyMap>,
@@ -38,6 +40,7 @@ impl AppState {
             secrets,
             sessions: Default::default(),
             terminals: Default::default(),
+            lsp: Default::default(),
             pending_keys: StdMutex::new(HashMap::new()),
         }
     }
@@ -147,6 +150,9 @@ pub fn run() {
             // 远程语言智能（M6 基础）
             commands::lsp::lsp_detect,
             commands::lsp::project_detect,
+            commands::lsp::lsp_open,
+            commands::lsp::lsp_send,
+            commands::lsp::lsp_close,
             // 局域网发现（M5）
             commands::discovery::discovery_interfaces,
             commands::discovery::discovery_default_route,
@@ -168,11 +174,12 @@ pub fn run() {
                 if window.label() == "main" {
                     let state: Option<tauri::State<AppState>> = window.try_state();
                     if let Some(state) = state {
-                        // 关闭全部终端通道
+                        // 关闭全部终端通道与 LSP 通道（§6.4 生命周期管理）
                         let terminals = state.terminals.clone();
                         tauri::async_runtime::spawn(async move {
                             app_services::terminal::close_all(&terminals).await;
                         });
+                        app_services::lsp::close_all(&state.lsp);
                         for entry in state.sessions.list() {
                             tauri::async_runtime::spawn(async move {
                                 let handle = entry.handle.lock().await;

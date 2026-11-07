@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::app_services::terminal::{self, EventSink, TerminalCommand, TerminalInfo};
 
-fn channel_sink(channel: tauri::ipc::Channel<serde_json::Value>) -> EventSink {
+pub(crate) fn channel_sink(channel: tauri::ipc::Channel<serde_json::Value>) -> EventSink {
     Arc::new(move |v| {
         let _ = channel.send(v);
     })

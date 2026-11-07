@@ -47,6 +47,8 @@ export function getOrCreateModel(
   );
   const changeSub = model.onDidChangeContent(() => onModelContent(uri));
   registry.set(uri, { model, changeSub });
+  // 通知远程 LSP 桥（M6）：经 window 事件解耦，避免 models→lsp→tabs→models 循环
+  window.dispatchEvent(new CustomEvent("glance:model-created", { detail: { uri } }));
   return model;
 }
 
@@ -82,4 +84,6 @@ export function disposeModel(uri: string): void {
   record.changeSub.dispose();
   record.model.dispose();
   registry.delete(uri);
+  // 通知远程 LSP 桥：didClose + 解除订阅
+  window.dispatchEvent(new CustomEvent("glance:model-disposed", { detail: { uri } }));
 }

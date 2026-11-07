@@ -114,7 +114,7 @@ mod tests {
         std::fs::write(nm.join("dep.js"), "const ros = 1;").unwrap();
 
         let hits = search_sync(&root, "ros");
-        let paths: Vec<&str> = hits.iter().map(|h| h.path.as_str()).collect();
+        let paths: Vec<String> = hits.iter().map(|h| h.path.replace('\\', "/")).collect();
         assert_eq!(hits.len(), 2, "{paths:?}");
         assert!(paths.iter().all(|p| p.contains("src/a.rs")), "node_modules 应被跳过: {paths:?}");
         assert_eq!(hits[0].line_number, 2);

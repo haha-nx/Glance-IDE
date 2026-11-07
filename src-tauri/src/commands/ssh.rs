@@ -429,6 +429,8 @@ pub async fn disconnect_session(
     session_id: String,
 ) -> Result<bool, CmdError> {
     let sid = parse_uuid(&session_id, "session_id")?;
+    // 先回收本会话的 LSP 通道（§6.4 生命周期：随会话关闭）
+    crate::app_services::lsp::close_by_session(&state.lsp, &sid).await;
     Ok(state.sessions.disconnect(&sid).await)
 }
 

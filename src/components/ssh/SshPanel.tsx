@@ -149,7 +149,16 @@ export function SshPanel() {
 
   async function disconnect(sessionId: string) {
     try {
+      // 通知远程 LSP 桥释放该设备上下文（§6.5）
+      const session = sessions.find((s) => s.sessionId === sessionId);
       await sshApi.disconnectSession(sessionId);
+      if (session) {
+        window.dispatchEvent(
+          new CustomEvent("glance:session-disconnected", {
+            detail: { deviceIdentityId: session.deviceIdentityId },
+          }),
+        );
+      }
       await refresh();
     } catch (err) {
       alert(err instanceof CmdError ? err.message : String(err));

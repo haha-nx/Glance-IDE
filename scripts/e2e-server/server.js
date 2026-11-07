@@ -10,7 +10,21 @@ const { Server } = require("ssh2");
 
 const hostKeyPath = process.argv[2] || "/tmp/glance-e2e/keys/hostkey";
 const port = Number(process.argv[3] || 2222);
-const SFTP_SERVER = "/usr/libexec/sftp-server";
+// sftp-server 二进制指定（避免 Git Bash/MSYS 对路径形环境变量做转换，用显式前缀协议）：
+//   linux:/usr/lib/openssh/sftp-server  → 经 wsl.exe 直通（Windows 无原生 sftp-server）
+//   win:C:\path\to\sftp-server.exe      → Windows 直接 spawn
+//   /usr/libexec/sftp-server（默认）     → 直接 spawn（macOS/Linux）
+const SFTP_SERVER_RAW = process.env.GLANCE_E2E_SFTP_SERVER || "/usr/libexec/sftp-server";
+
+function spawnSftpServer() {
+  if (SFTP_SERVER_RAW.startsWith("linux:")) {
+    return spawn("wsl.exe", [SFTP_SERVER_RAW.slice(6)], { stdio: ["pipe", "pipe", "pipe"] });
+  }
+  if (SFTP_SERVER_RAW.startsWith("win:")) {
+    return spawn(SFTP_SERVER_RAW.slice(4), [], { stdio: ["pipe", "pipe", "pipe"] });
+  }
+  return spawn(SFTP_SERVER_RAW, [], { stdio: ["pipe", "pipe", "pipe"] });
+}
 
 const hostKey = fs.readFileSync(hostKeyPath);
 
@@ -66,7 +80,7 @@ new Server({ hostKeys: [hostKey], ident: "glance-e2e-sshd" }, (client) => {
       session.on("subsystem", (accept, reject, info) => {
         if (info.name !== "sftp") return reject();
         const channel = accept();
-        const proc = spawn(SFTP_SERVER, [], { stdio: ["pipe", "pipe", "pipe"] });
+        const proc = spawnSftpServer();
         proc.stderr.on("data", (d) => console.log("[sftp-server stderr]", d.toString()));
         channel.pipe(proc.stdin);
         proc.stdout.pipe(channel);
