@@ -1,0 +1,7 @@
+# macOS dev 运行器：每次 cargo run / tauri dev 后自动 ad-hoc 签名
+# （本地网络权限要求；详见 scripts/dev-runner.sh）
+[target.x86_64-apple-darwin]
+runner = "../scripts/dev-runner.sh"
+
+[aarch64-apple-darwin]
+runner = "../scripts/dev-runner.sh"

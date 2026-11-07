@@ -1,0 +1,48 @@
+[package]
+name = "glance-ide"
+version = "0.1.0"
+description = "Glance IDE — 本地/远程一体化开发工作台"
+authors = ["Glance IDE"]
+edition = "2021"
+
+[lib]
+name = "glance_ide_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+tauri-plugin-dialog = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "net", "time", "sync"] }
+async-trait = "0.1"
+
+# 存储
+rusqlite = { version = "0.41", features = ["bundled"] }
+keyring = "4"
+
+# SSH（M0 锁定编译；M2 起接入握手与认证）
+russh = "0.65"
+russh-sftp = "3"
+
+# 工具
+uuid = { version = "1", features = ["v4", "v5"] }
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "7"
+log = "0.4"
+sha2 = "0.10"
+base64 = "0.22"
+if-addrs = "0.13"
+mdns-sd = "0.13"
+
+[profile.dev]
+opt-level = 1
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
+uuid = { version = "1", features = ["v4"] }

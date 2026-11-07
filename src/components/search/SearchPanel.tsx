@@ -1,0 +1,101 @@
+import { useEffect, useRef, useState } from "react";
+import { workspaceApi, type SearchHit } from "../../services/workspace";
+import { explorerStore } from "../../stores/explorer";
+import { tabsStore } from "../../stores/tabs";
+import { IconSearch } from "../common/icons";
+
+/** 全局搜索面板（M1 任务 1.6）：按文件分组，点击命中行打开文件并定位 */
+export function SearchPanel() {
+  const rootPath = explorerStore((s) => s.rootPath);
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (!rootPath) return;
+    timerRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const result = await workspaceApi.search(rootPath, query);
+        setHits(result);
+        setSearched(true);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [query, rootPath]);
+
+  // 按文件分组
+  const groups = new Map<string, SearchHit[]>();
+  for (const hit of hits) {
+    const list = groups.get(hit.path) ?? [];
+    list.push(hit);
+    groups.set(hit.path, list);
+  }
+
+  function highlight(hit: SearchHit) {
+    const { matchStart, matchLen, lineText } = hit;
+    return (
+      <>
+        {lineText.slice(0, matchStart)}
+        <mark className="rounded-sm bg-amber-500/30 text-amber-200">
+          {lineText.slice(matchStart, matchStart + matchLen)}
+        </mark>
+        {lineText.slice(matchStart + matchLen)}
+      </>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col bg-zinc-900">
+      <div className="flex h-9 shrink-0 items-center px-3 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+        搜索
+      </div>
+      <div className="px-2 pb-2">
+        <div className="flex items-center gap-1.5 rounded border border-zinc-700 bg-zinc-950 px-2 py-1.5 focus-within:border-sky-600">
+          <IconSearch size={13} className="text-zinc-500" />
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={rootPath ? "在文件夹中搜索…" : "先打开文件夹"}
+            disabled={!rootPath}
+            className="w-full bg-transparent text-sm text-zinc-200 outline-none placeholder:text-zinc-600"
+          />
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-2 pb-2">
+        {searching && <p className="px-1 py-1 text-xs text-zinc-500">搜索中…</p>}
+        {!searching && searched && hits.length === 0 && query.trim() && (
+          <p className="px-1 py-1 text-xs text-zinc-500">无结果</p>
+        )}
+        {[...groups.entries()].map(([path, list]) => (
+          <div key={path} className="mb-2">
+            <p className="truncate px-1 py-0.5 text-[11px] text-zinc-500" title={path}>
+              {path.split("/").pop()}{" "}
+              <span className="text-zinc-700">({list.length})</span>
+            </p>
+            {list.map((hit, i) => (
+              <button
+                key={`${hit.path}:${hit.lineNumber}:${i}`}
+                onClick={() => void tabsStore.getState().openFileAtLine(hit.path, hit.lineNumber)}
+                className="block w-full truncate rounded px-2 py-1 text-left font-mono text-xs text-zinc-300 hover:bg-zinc-800"
+                title={hit.path}
+              >
+                <span className="mr-2 text-zinc-600">{hit.lineNumber}</span>
+                {highlight(hit)}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
