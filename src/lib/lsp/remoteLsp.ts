@@ -448,13 +448,14 @@ class RemoteLspController {
       return Promise.reject(new Error("LSP 通道不可用"));
     }
     // 请求超时（避免悬挂）：30s
-    setTimeout(() => {
-      if (this.pending.has(id)) {
+    const timer = setTimeout(() => {
+      const p = this.pending.get(id);
+      if (p) {
         this.pending.delete(id);
-        // 以 reject 收尾
-        void Promise.reject(new Error("LSP 请求超时")).catch(() => {});
+        p.reject(new Error("LSP 请求超时"));
       }
     }, 30_000);
+    void timer;
     return promise;
   }
 

@@ -21,13 +21,15 @@ impl SftpFileSystem {
         Self { sftp: AsyncMutex::new(session) }
     }
 
-    /// 解析远程路径（如 "." → 用户主目录）
+    /// 解析远程路径（如 "." → 用户主目录）。
+    /// 注意：russh-sftp 的 expand_path 依赖 expand-path@openssh.com 扩展（标准 sftp-server
+    /// 不宣告该扩展，恒返回 None）；改用标准 SSH_FXP_REALPATH（canonicalize），全服务器可用。
     pub async fn expand_path(&self, path: &str) -> FsResult<String> {
         let sftp = self.sftp.lock().await;
-        sftp.expand_path(path)
+        sftp.canonicalize(path)
             .await
-            .map_err(Self::map_err)?
-            .ok_or_else(|| FsError::NotFound(format!("无法解析远程路径: {path}")))
+            .map_err(Self::map_err)
+            .map(|p| p.replace('\\', "/"))
     }
 
     fn map_err(e: impl std::fmt::Display) -> FsError {
