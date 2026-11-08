@@ -764,3 +764,17 @@ window.addEventListener("glance:session-disconnected", (e) => {
   const detail = (e as CustomEvent<{ deviceIdentityId: string }>).detail;
   if (detail?.deviceIdentityId) void lspManager.disposeDevice(detail.deviceIdentityId);
 });
+// 重连：释放旧上下文后，为该设备已打开的模型重新走一遍挂接流程
+// （Model 常驻注册表，不会重新触发 model-created，需显式复活）
+window.addEventListener("glance:session-connected", (e) => {
+  const detail = (e as CustomEvent<{ deviceIdentityId: string }>).detail;
+  if (!detail?.deviceIdentityId) return;
+  const deviceId = detail.deviceIdentityId;
+  void lspManager.disposeDevice(deviceId).then(() => {
+    const prefix = `remote://${deviceId}`;
+    for (const model of monaco.editor.getModels()) {
+      const uri = model.uri.toString();
+      if (uri.startsWith(prefix)) lspManager.handleModelCreated(uri);
+    }
+  });
+});

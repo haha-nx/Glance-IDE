@@ -316,6 +316,9 @@ pub async fn connect_profile(
         ConnectStep::Connected { handle, device_identity_id, device_name } => {
             let _ = connection_profiles::touch_last_seen(&state.db, device_identity_id);
             let endpoint = format!("{}:{}", row.host, row.port);
+            // 替换语义（新握手成功后才清旧）：同配置旧会话（含僵尸）一并回收，
+            // 避免「再次连接」只增不减、文件操作路由到死会话
+            state.sessions.disconnect_profile_sessions(&pid).await;
             let session_id = Uuid::new_v4();
             state.sessions.insert(
                 session_id,
@@ -408,6 +411,8 @@ pub async fn remote_home(
 
 #[tauri::command]
 pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionDto>, CmdError> {
+    // 先清理传输已断开的僵尸会话：UI 不再显示死会话绿灯，文件操作也不再路由到它们
+    state.sessions.prune_dead().await;
     Ok(state
         .sessions
         .list()

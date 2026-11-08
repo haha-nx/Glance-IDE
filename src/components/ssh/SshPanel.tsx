@@ -68,6 +68,17 @@ export function SshPanel() {
       switch (outcome.status) {
         case "connected":
           await refresh();
+          // 新会话接管该设备：旧文件树缓存不可信，全部失效并重载当前远程根
+          explorerStore.getState().invalidateRemote();
+          window.dispatchEvent(
+            new CustomEvent("glance:session-connected", {
+              detail: { deviceIdentityId: outcome.deviceIdentityId },
+            }),
+          );
+          const root = explorerStore.getState().rootPath;
+          if (root?.startsWith("remote://")) {
+            await explorerStore.getState().refresh(root);
+          }
           break;
         case "unknownIdentity":
         case "identityChanged":
@@ -159,6 +170,7 @@ export function SshPanel() {
           }),
         );
       }
+      explorerStore.getState().invalidateRemote();
       await refresh();
     } catch (err) {
       alert(err instanceof CmdError ? err.message : String(err));
@@ -365,9 +377,14 @@ export function SshPanel() {
                   className="flex items-center gap-1.5 px-2.5 py-1 text-xs"
                   onClick={() => void connect(profile)}
                   disabled={isConnecting}
+                  title={
+                    activeSessions.length > 0
+                      ? "断开该配置的旧会话并重新连接（旧会话已断开时用此恢复文件访问）"
+                      : undefined
+                  }
                 >
                   <IconPlug size={13} />
-                  {isConnecting ? "连接中…" : activeSessions.length > 0 ? "再次连接" : "连接"}
+                  {isConnecting ? "连接中…" : activeSessions.length > 0 ? "重新连接" : "连接"}
                 </PrimaryButton>
               </div>
             </div>

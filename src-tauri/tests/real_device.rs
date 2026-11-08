@@ -343,3 +343,51 @@ async fn real_05_lsp_detect() {
         .unwrap();
     assert_eq!(project.workspace_root, "/tmp");
 }
+
+/// #6 会话生命周期（用户反馈修复的回归）：
+/// 同设备多会话时 find_by_device 必须路由到**最新**会话；
+/// 传输断开的僵尸会话必须被 prune；同配置替换语义（disconnect_profile_sessions）生效。
+#[tokio::test]
+async fn real_06_session_lifecycle() {
+    let Some(ctx) = real_ctx() else { return };
+    let pool = trusted_for(&ctx);
+
+    // 两个"不同时刻"的会话（同一设备身份，模拟反复点击连接产生的堆积）
+    let step1 = connect_and_auth(params(&ctx, pool.clone(), &ctx.password)).await;
+    let ConnectStep::Connected { handle: h1, .. } = step1 else {
+        panic!("第一次连接失败: {}", step_name(&step1));
+    };
+    let step2 = connect_and_auth(params(&ctx, pool.clone(), &ctx.password)).await;
+    let ConnectStep::Connected { handle: h2, device_identity_id, .. } = step2 else {
+        panic!("第二次连接失败: {}", step_name(&step2));
+    };
+
+    let sessions = SessionManager::default();
+    let profile_id = Uuid::new_v4();
+    let id1 = sessions.insert(Uuid::new_v4(), profile_id, device_identity_id, None, "s1".into(), 1000, h1).session_id;
+    let id2 = sessions.insert(Uuid::new_v4(), profile_id, device_identity_id, None, "s2".into(), 2000, h2).session_id;
+
+    // 1) 路由必须选最新（s2, connected_at=2000），而非 HashMap 随机序
+    let found = sessions.find_by_device(&device_identity_id).await.expect("应有活跃会话");
+    assert_eq!(found.endpoint, "s2", "find_by_device 应路由到最新会话");
+
+    // 2) 僵尸清理：仅断开 s1 的传输（保留条目，模拟对端断开）→ prune 后仍返回 s2
+    assert!(sessions.drop_transport(&id1).await);
+    // 传输关闭是异步完成的（会话任务处理 Disconnect 后 sender 才置 closed）
+    for _ in 0..50 {
+        match sessions.get(&id1) {
+            Some(e) if e.is_alive().await => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            _ => break,
+        }
+    }
+    let found = sessions.find_by_device(&device_identity_id).await.expect("s2 仍应活跃");
+    assert_eq!(found.endpoint, "s2");
+    assert_eq!(sessions.list().len(), 1, "僵尸会话应被清理");
+
+    // 3) 替换语义：同一 profile 的全部会话一并回收
+    let removed = sessions.disconnect_profile_sessions(&profile_id).await;
+    assert_eq!(removed.len(), 1, "应移除 s2（s1 已被 prune）");
+    assert!(sessions.find_by_device(&device_identity_id).await.is_none());
+}

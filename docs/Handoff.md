@@ -22,6 +22,18 @@
 扩展（标准 sftp-server 不宣告，恒返回 None）→ 改用标准 `SSH_FXP_REALPATH`
 （`canonicalize`）。症状：「打开文件」报「无法解析远程路径: .」。
 
+**修复的真实 Bug #2（用户反馈：连接后无法访问文件 / 再次连接没用）**：三个叠加缺陷——
+① `SessionManager` 条目永不回收：设备重启/网络切换后 handle 已死的**僵尸会话**
+一直存在且 UI 显示绿灯；② `find_by_device` 从 HashMap **随机**挑同设备会话，
+文件操作可能路由到死会话（报错或卡死）；③ 前端 `ensureLoaded` 失败后缓存空列表，
+目录永远显示"(空)"。修复：`prune_dead()`（按 `Handle::is_closed` 清理，`list_sessions`
+先清后列）+ `find_by_device` 改异步并**选最新**会话 + `connect_profile` **替换语义**
+（新握手成功后回收同配置全部旧会话——「重新连接」即恢复手段）+ 前端
+`invalidateRemote()`（连接/断开时清远程目录缓存，展开态保留按需重载）+ LSP 桥
+监听 `glance:session-connected` 复活已打开远程文档的语言服务。
+回归测试：`real_device::real_06_session_lifecycle`（真机 6/6）。
+**用户侧恢复口径：设备断电/换网后，点该配置的「重新连接」即可恢复文件访问。**
+
 **Windows 打包**：`npm run tauri build` →
 `src-tauri/target/release/bundle/msi/Glance IDE_0.1.0_x64_en-US.msi` +
 `bundle/nsis/Glance IDE_0.1.0_x64-setup.exe`。构建依赖：NASM（aws-lc-sys），

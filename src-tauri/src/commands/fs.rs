@@ -27,6 +27,7 @@ async fn resolve(
             let entry = state
                 .sessions
                 .find_by_device(&device_identity_id)
+                .await
                 .ok_or_else(|| FsError::NotFound("设备会话未连接，请先连接".into()))?;
             let provider = entry.ensure_sftp().await.map_err(FsError::Io)?;
             Ok((provider, path))
@@ -90,6 +91,7 @@ pub async fn rename_entry(
             let to_provider = state
                 .sessions
                 .find_by_device(&device_identity_id)
+                .await
                 .ok_or_else(|| FsError::NotFound("设备会话未连接".into()))?
                 .ensure_sftp()
                 .await

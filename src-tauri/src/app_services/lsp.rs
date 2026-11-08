@@ -348,7 +348,7 @@ pub enum LspEvent {
     Closed { reason: Option<String> },
 }
 
-enum LspCommand {
+pub(crate) enum LspCommand {
     Write(Vec<u8>),
     Close,
 }
@@ -358,8 +358,12 @@ struct LspChannelEntry {
     session_id: Uuid,
     /// 所属设备身份（§6.5：LSP 上下文按设备隔离，不以 IP 为键）
     pub device_identity_id: Uuid,
+    /// 工作区/语言/服务器（§6.5 缓存键，诊断与展示用）
+    #[allow(dead_code)]
     pub workspace_root: String,
+    #[allow(dead_code)]
     pub language: String,
+    #[allow(dead_code)]
     pub server: String,
     commands: mpsc::Sender<LspCommand>,
 }
@@ -379,7 +383,7 @@ impl LspRegistry {
         self.channels.lock().unwrap().remove(lsp_id)
     }
 
-    pub fn send(&self, lsp_id: &Uuid, cmd: LspCommand) -> bool {
+    pub(crate) fn send(&self, lsp_id: &Uuid, cmd: LspCommand) -> bool {
         match self.channels.lock().unwrap().get(lsp_id) {
             Some(entry) => entry.commands.try_send(cmd).is_ok(),
             None => false,

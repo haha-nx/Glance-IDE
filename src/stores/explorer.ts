@@ -33,6 +33,8 @@ interface ExplorerState {
   toggleDir(path: string): Promise<void>;
   refresh(path: string): Promise<void>;
   refreshParentOf(path: string): Promise<void>;
+  /** 清空全部远程目录缓存（会话重连后旧数据不可信，展开态保留、按需重载） */
+  invalidateRemote(): void;
   select(path: string | null): void;
   parentOf(path: string): string | null;
 }
@@ -99,6 +101,17 @@ export const explorerStore = create<ExplorerState>()((set, get) => ({
     if (parent && get().childrenMap[parent]) {
       await get().refresh(parent);
     }
+  },
+
+  invalidateRemote: () => {
+    set((s) => {
+      const childrenMap: Record<string, FileEntryDto[]> = {};
+      for (const [k, v] of Object.entries(s.childrenMap)) {
+        if (!k.startsWith("remote://")) childrenMap[k] = v;
+      }
+      return { childrenMap };
+    });
+    // 已展开的远程目录由 TreeNode 的 useEffect 检测到 children 缺失后自动重载
   },
 
   select: (path) => set({ selectedPath: path }),
