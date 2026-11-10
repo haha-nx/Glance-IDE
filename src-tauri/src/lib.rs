@@ -10,7 +10,9 @@ pub mod storage;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use tauri::{Emitter, Manager};
+use tauri::Manager;
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
 
 use commands::ssh::PendingKeyMap;
 use filesystem::FileSystemProvider;
@@ -49,7 +51,6 @@ impl AppState {
 /// 发现服务状态（独立 manage，避免污染 AppState）
 pub struct DiscoveryHandles;
 
-
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -67,63 +68,69 @@ pub fn run() {
             ));
             app.manage(commands::discovery::DiscoveryState::default());
 
-            // 原生菜单（用户反馈：文件菜单需包含打开文件夹/文件/设置）
-            use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-            let open_folder =
-                MenuItem::with_id(app, "open_folder", "打开文件夹…", true, None::<&str>)?;
-            let open_file =
-                MenuItem::with_id(app, "open_file", "打开文件…", true, None::<&str>)?;
-            let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
-            let close_window = PredefinedMenuItem::close_window(app, None::<&str>)?;
-            let file_menu = Submenu::with_items(
-                app,
-                "文件",
-                true,
-                &[&open_folder, &open_file, &settings, &close_window],
-            )?;
+            // 仅在 macOS 上注册系统顶部全局菜单；Windows 使用与 VS Code 一致的单行自定义暗色标题栏，避免出现两行与白色菜单
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+                let open_folder =
+                    MenuItem::with_id(app, "open_folder", "打开文件夹…", true, None::<&str>)?;
+                let open_file =
+                    MenuItem::with_id(app, "open_file", "打开文件…", true, None::<&str>)?;
+                let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+                let close_window = PredefinedMenuItem::close_window(app, None::<&str>)?;
+                let file_menu = Submenu::with_items(
+                    app,
+                    "文件",
+                    true,
+                    &[&open_folder, &open_file, &settings, &close_window],
+                )?;
 
-            let undo = PredefinedMenuItem::undo(app, Some("撤销"))?;
-            let redo = PredefinedMenuItem::redo(app, Some("重做"))?;
-            let sep1 = PredefinedMenuItem::separator(app)?;
-            let cut = PredefinedMenuItem::cut(app, Some("剪切"))?;
-            let copy = PredefinedMenuItem::copy(app, Some("拷贝"))?;
-            let paste = PredefinedMenuItem::paste(app, Some("粘贴"))?;
-            let sep2 = PredefinedMenuItem::separator(app)?;
-            let select_all = PredefinedMenuItem::select_all(app, Some("全选"))?;
-            let edit_menu = Submenu::with_items(
-                app,
-                "编辑",
-                true,
-                &[&undo, &redo, &sep1, &cut, &copy, &paste, &sep2, &select_all],
-            )?;
+                let undo = PredefinedMenuItem::undo(app, Some("撤销"))?;
+                let redo = PredefinedMenuItem::redo(app, Some("重做"))?;
+                let sep1 = PredefinedMenuItem::separator(app)?;
+                let cut = PredefinedMenuItem::cut(app, Some("剪切"))?;
+                let copy = PredefinedMenuItem::copy(app, Some("拷贝"))?;
+                let paste = PredefinedMenuItem::paste(app, Some("粘贴"))?;
+                let sep2 = PredefinedMenuItem::separator(app)?;
+                let select_all = PredefinedMenuItem::select_all(app, Some("全选"))?;
+                let edit_menu = Submenu::with_items(
+                    app,
+                    "编辑",
+                    true,
+                    &[&undo, &redo, &sep1, &cut, &copy, &paste, &sep2, &select_all],
+                )?;
 
-            let minimize = PredefinedMenuItem::minimize(app, None::<&str>)?;
-            let window_menu =
-                Submenu::with_items(app, "窗口", true, &[&minimize, &close_window])?;
+                let minimize = PredefinedMenuItem::minimize(app, None::<&str>)?;
+                let window_menu =
+                    Submenu::with_items(app, "窗口", true, &[&minimize, &close_window])?;
 
-            let about = PredefinedMenuItem::about(app, Some("关于 Glance IDE"), None)?;
-            let help_menu = Submenu::with_items(app, "帮助", true, &[&about])?;
+                let about = PredefinedMenuItem::about(app, Some("关于 Glance IDE"), None)?;
+                let help_menu = Submenu::with_items(app, "帮助", true, &[&about])?;
 
-            let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
-            app.set_menu(menu)?;
+                let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &window_menu, &help_menu])?;
+                let _ = app.set_menu(menu);
 
-            app.on_menu_event(|app, event| match event.id().as_ref() {
-                "open_folder" => {
-                    let _ = app.emit("menu:open-folder", ());
-                }
-                "open_file" => {
-                    let _ = app.emit("menu:open-file", ());
-                }
-                "settings" => {
-                    let _ = app.emit("menu:settings", ());
-                }
-                _ => {}
-            });
+                app.on_menu_event(|app, event| match event.id().as_ref() {
+                    "open_folder" => {
+                        let _ = app.emit("menu:open-folder", ());
+                    }
+                    "open_file" => {
+                        let _ = app.emit("menu:open-file", ());
+                    }
+                    "settings" => {
+                        let _ = app.emit("menu:settings", ());
+                    }
+                    _ => {}
+                });
+            }
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::app::get_app_info,
+            commands::app::exit_app,
+            commands::app::close_window,
+            commands::app::open_new_window,
             // 文件系统
             commands::fs::list_dir,
             commands::fs::read_file,
@@ -143,6 +150,11 @@ pub fn run() {
             commands::ssh::list_sessions,
             commands::ssh::disconnect_session,
             commands::ssh::remote_home,
+            // WSL 功能
+            commands::wsl::wsl_is_available,
+            commands::wsl::wsl_list_distros,
+            commands::wsl::wsl_distro_home,
+            commands::wsl::wsl_run_task,
             // 搜索与界面状态（M1）
             commands::workspace::search_workspace,
             commands::workspace::get_ui_state,
@@ -162,6 +174,8 @@ pub fn run() {
             commands::discovery::discovery_mdns_cancel,
             // 终端与构建任务（M4）
             commands::terminal::terminal_open,
+            commands::terminal::terminal_open_local,
+            commands::terminal::terminal_open_wsl,
             commands::terminal::terminal_write,
             commands::terminal::terminal_resize,
             commands::terminal::terminal_close,

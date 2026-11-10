@@ -4,6 +4,7 @@ export interface InterfaceInfo {
   name: string;
   ipv4: string;
   suggestedCidr: string;
+  isVirtual: boolean;
 }
 
 export interface DiscoveryCandidate {

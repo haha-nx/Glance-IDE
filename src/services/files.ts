@@ -24,7 +24,7 @@ function wrapError(err: unknown): FsError {
   return new FsError({ code: "io", message: String(err) });
 }
 
-/** 文件系统 IPC 封装 —— 本会话仅 local Provider；M3 加入 remote URI 时按 scheme 分派 */
+/** 文件系统 IPC 封装 */
 export const filesApi = {
   async listDir(path: string): Promise<FileEntryDto[]> {
     try {
@@ -82,7 +82,7 @@ export const filesApi = {
     }
   },
 
-  async deleteEntry(path: string, recursive: boolean): Promise<void> {
+  async deleteEntry(path: string, recursive = false): Promise<void> {
     try {
       await invoke("delete_entry", { path, recursive });
     } catch (err) {
@@ -94,5 +94,34 @@ export const filesApi = {
 export const appApi = {
   async getInfo(): Promise<AppInfoDto> {
     return invoke<AppInfoDto>("get_app_info");
+  },
+
+  async exitApp(): Promise<void> {
+    try {
+      await invoke("exit_app");
+    } catch {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().destroy();
+    }
+  },
+
+  async closeWindow(): Promise<void> {
+    try {
+      await invoke("close_window");
+    } catch {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().destroy();
+    }
+  },
+
+  async openNewWindow(profileId?: string, wslDistro?: string): Promise<void> {
+    try {
+      await invoke("open_new_window", {
+        profileId: profileId || null,
+        wslDistro: wslDistro || null,
+      });
+    } catch (err) {
+      console.error("新建窗口失败:", err);
+    }
   },
 };

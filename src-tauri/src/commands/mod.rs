@@ -7,6 +7,7 @@ pub mod lsp;
 pub mod ssh;
 pub mod terminal;
 pub mod workspace;
+pub mod wsl;
 
 /// 命令层错误（序列化为 { code, message }）
 #[derive(Debug, thiserror::Error)]

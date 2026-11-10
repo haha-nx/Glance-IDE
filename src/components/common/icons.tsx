@@ -195,3 +195,13 @@ export function IconPlug(p: IconProps) {
     </Svg>
   );
 }
+
+/** WSL（Linux/终端控制台风格） */
+export function IconWsl(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <rect x="2" y="2.5" width="12" height="11" rx="2" />
+      <path d="M5 6.5l2.5 2L5 10.5M9.5 10.5h2" />
+    </Svg>
+  );
+}

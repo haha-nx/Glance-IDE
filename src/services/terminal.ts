@@ -27,7 +27,7 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 export const terminalApi = {
-  /** 打开 PTY 终端；onEvent 在 invoke 返回前后都会收到推送 */
+  /** 打开 SSH PTY 终端；onEvent 在 invoke 返回前后都会收到推送 */
   async open(
     sessionId: string,
     cols: number,
@@ -40,6 +40,40 @@ export const terminalApi = {
         sessionId,
         cols,
         rows,
+        onData: channel,
+      });
+    } catch (err) {
+      throw wrapCmdError(err);
+    }
+  },
+
+  /** 打开本机系统终端（PowerShell / Bash） */
+  async openLocal(
+    cwd: string | null,
+    onEvent: (e: TerminalEvent) => void,
+  ): Promise<TerminalInfo> {
+    const channel = new Channel<TerminalEvent>(onEvent);
+    try {
+      return await invoke<TerminalInfo>("terminal_open_local", {
+        cwd: cwd || null,
+        onData: channel,
+      });
+    } catch (err) {
+      throw wrapCmdError(err);
+    }
+  },
+
+  /** 打开 WSL 终端 */
+  async openWsl(
+    distro: string,
+    cwd: string | null,
+    onEvent: (e: TerminalEvent) => void,
+  ): Promise<TerminalInfo> {
+    const channel = new Channel<TerminalEvent>(onEvent);
+    try {
+      return await invoke<TerminalInfo>("terminal_open_wsl", {
+        distro,
+        cwd: cwd || null,
         onData: channel,
       });
     } catch (err) {

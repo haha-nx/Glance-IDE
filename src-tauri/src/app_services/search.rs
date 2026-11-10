@@ -82,7 +82,7 @@ fn search_sync(root: &Path, needle: &str) -> Vec<SearchHit> {
                         path: path.display().to_string(),
                         line_number: idx + 1,
                         line_text: line.chars().take(400).collect(),
-                        match_start: pos,
+                        match_start: line_lower[..pos].chars().count(),
                         match_len: needle_lower.chars().count(),
                     });
                     file_hits += 1;

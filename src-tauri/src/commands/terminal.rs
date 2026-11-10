@@ -36,6 +36,31 @@ pub async fn terminal_open(
 }
 
 #[tauri::command]
+pub async fn terminal_open_local(
+    state: State<'_, AppState>,
+    cwd: Option<String>,
+    on_data: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<TerminalInfo, CmdError> {
+    let registry = state.terminals.clone();
+    terminal::open_local_terminal(registry, cwd.as_deref(), channel_sink(on_data))
+        .await
+        .map_err(CmdError::validation)
+}
+
+#[tauri::command]
+pub async fn terminal_open_wsl(
+    state: State<'_, AppState>,
+    distro: String,
+    cwd: Option<String>,
+    on_data: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<TerminalInfo, CmdError> {
+    let registry = state.terminals.clone();
+    terminal::open_wsl_terminal(registry, &distro, cwd.as_deref(), channel_sink(on_data))
+        .await
+        .map_err(CmdError::validation)
+}
+
+#[tauri::command]
 pub async fn terminal_write(
     state: State<'_, AppState>,
     channel_id: String,

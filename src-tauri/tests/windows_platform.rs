@@ -57,3 +57,36 @@ fn network_interfaces_enumerable() {
         "应枚举到非回环 IPv4 接口"
     );
 }
+
+
+/// WSL 输出解码与发行版探测测试
+#[test]
+fn test_wsl_support() {
+    use glance_ide_lib::app_services::wsl::{decode_wsl_output, list_distros};
+    use glance_ide_lib::filesystem::ResourceUri;
+
+    // 1. 验证 UTF-16LE 解码
+    let utf16_sample: Vec<u8> = "Ubuntu\r\n"
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    let decoded = decode_wsl_output(&utf16_sample);
+    assert_eq!(decoded.trim(), "Ubuntu");
+
+    // 2. 验证 WSL URI 解析与 Windows UNC 映射
+    let uri = ResourceUri::parse("wsl://Ubuntu/home/haha/main.cpp").unwrap();
+    if cfg!(windows) {
+        assert_eq!(uri.to_windows_path(), r"\\wsl.localhost\Ubuntu\home\haha\main.cpp");
+    }
+    assert_eq!(uri.as_string(), "wsl://Ubuntu/home/haha/main.cpp");
+
+    // 3. 验证 WSL 发行版枚举
+    if cfg!(windows) {
+        if let Ok(distros) = list_distros() {
+            println!("已检测到的 WSL 发行版数量: {}", distros.len());
+            for d in &distros {
+                println!(" - {} (版本: {}, 状态: {}, 默认: {})", d.name, d.version, d.state, d.is_default);
+            }
+        }
+    }
+}

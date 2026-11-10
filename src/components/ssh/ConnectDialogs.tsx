@@ -81,7 +81,7 @@ export function RegisterIdentityDialog({
         autoFocus
         value={displayName}
         onChange={(e) => setDisplayName(e.target.value)}
-        placeholder="设备备注名（如：Raspberry Pi A）"
+        placeholder="设备备注名（选填）"
         className="w-full rounded border border-zinc-600 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-sky-600"
       />
     </Modal>

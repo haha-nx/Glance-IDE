@@ -4,6 +4,7 @@
 //! - terminal：PTY 终端与构建任务执行器（§7）
 //! - discovery：局域网发现（mDNS + 受控 TCP 扫描，§8）
 //! - search：全局文本搜索
+//! - wsl：WSL 发行版探测与环境调度
 
 pub mod connection_profiles;
 pub mod discovery;
@@ -11,4 +12,4 @@ pub mod lsp;
 pub mod search;
 pub mod ssh_sessions;
 pub mod terminal;
-
+pub mod wsl;

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { tabsStore } from "../../stores/tabs";
 import { uiStore } from "../../stores/ui";
 import { appApi } from "../../services/files";
@@ -8,25 +8,24 @@ interface StatusBarProps {
   onToggleTerminal?: () => void;
 }
 
-/** 活动标签对应设备的远程 LSP 状态（M6，§6.6 降级可见） */
-function lspStatusFor(uri: string | null): { deviceId: string; status: LspStatus } | null {
-  if (!uri || !uri.startsWith("remote://")) return null;
-  const rest = uri.slice("remote://".length);
-  const slash = rest.indexOf("/");
-  if (slash <= 0) return null;
-  const deviceId = rest.slice(0, slash);
-  const status = lspStatusStore((s) => s.statuses[deviceId]);
-  if (!status) return { deviceId, status: { state: "closed" } };
-  return { deviceId, status };
-}
-
 export function StatusBar({ onToggleTerminal }: StatusBarProps) {
   const activeId = tabsStore((s) => s.activeId);
   const tabs = tabsStore((s) => s.tabs);
   const line = uiStore((s) => s.line);
   const column = uiStore((s) => s.column);
   const [version, setVersion] = useState<string>("");
-  const lsp = lspStatusFor(activeId);
+  const statuses = lspStatusStore((s) => s.statuses);
+
+  // 安全计算远程 LSP 状态（纯数据计算，严禁在条件分支或嵌套函数中调用 Hook）
+  const lsp = useMemo(() => {
+    if (!activeId || !activeId.startsWith("remote://")) return null;
+    const rest = activeId.slice("remote://".length);
+    const slash = rest.indexOf("/");
+    if (slash <= 0) return null;
+    const deviceId = rest.slice(0, slash);
+    const status = statuses[deviceId] ?? { state: "closed" };
+    return { deviceId, status };
+  }, [activeId, statuses]);
 
   useEffect(() => {
     appApi

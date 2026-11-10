@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag to attach binaries to (e.g. v0.1.0)'
+        required: false
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS Installer
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Tauri macOS application
+        run: |
+          npm run build
+          npm run tauri build -- --target universal-apple-darwin || npm run tauri build
+
+      - name: Upload macOS artifacts to Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || 'v0.1.0' }}"
+          echo "Target release tag: $TAG"
+          gh release view "$TAG" || gh release create "$TAG" --title "Glance IDE $TAG" --notes "Glance IDE $TAG 发布版本"
+          find src-tauri/target -name "*.dmg" -o -name "*.app.tar.gz" | while read -r file; do
+            echo "Uploading $file..."
+            gh release upload "$TAG" "$file" --clobber
+          done

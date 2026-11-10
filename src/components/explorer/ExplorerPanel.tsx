@@ -151,8 +151,8 @@ export function ExplorerPanel() {
       ) : (
         <>
           <div className="flex items-center justify-between px-3 py-1">
-            <span className="text-sm font-medium text-zinc-200" title={rootPath}>
-              {rootName}
+            <span className="min-w-0 flex-1 truncate whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-zinc-300" title={rootPath || "文件"}>
+              {rootName || "文件"}
             </span>
             <div className="flex gap-1">
               <button

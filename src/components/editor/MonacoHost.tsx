@@ -19,11 +19,19 @@ export function useGlobalSave() {
   }, []);
 }
 
-let editorInstance: monaco.editor.IStandaloneCodeEditor | null = null;
+interface MonacoHostProps {
+  uri?: string;
+}
 
-export function MonacoHost() {
+export function MonacoHost({ uri: customUri }: MonacoHostProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const activeId = tabsStore((s) => s.activeId);
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+
+  const globalActiveId = tabsStore((s) => s.activeId);
+  const targetUri = customUri || globalActiveId;
+  const activeTab = tabsStore((s) => s.tabs.find((t) => t.uri === targetUri));
+  const targetUriRef = useRef(targetUri);
+  targetUriRef.current = targetUri;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -43,74 +51,126 @@ export function MonacoHost() {
       cursorBlinking: "smooth",
       padding: { top: 8 },
     });
-    editorInstance = editor;
+    editorRef.current = editor;
+
+    if (targetUri) {
+      const m = getModel(targetUri);
+      if (m) {
+        editor.setModel(m);
+      }
+    }
+
+    const layout = () => {
+      if (containerRef.current && editor) {
+        const { clientWidth, clientHeight } = containerRef.current;
+        if (clientWidth > 0 && clientHeight > 0) {
+          editor.layout({ width: clientWidth, height: clientHeight });
+        } else {
+          editor.layout();
+        }
+      }
+    };
+
+    requestAnimationFrame(layout);
+    const t1 = setTimeout(layout, 50);
+    const t2 = setTimeout(layout, 150);
 
     editor.onDidChangeCursorPosition((e) => {
       uiStore.getState().setCursor(e.position.lineNumber, e.position.column);
     });
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      const { activeId: id, saveTab } = tabsStore.getState();
-      if (id) void saveTab(id);
+      const id = targetUriRef.current || tabsStore.getState().activeId;
+      if (id) void tabsStore.getState().saveTab(id);
     });
 
-    const ro = new ResizeObserver(() => editor.layout());
+    const ro = new ResizeObserver(() => layout());
     ro.observe(containerRef.current);
-    // 全屏 ↔ 窗口切换时 macOS 窗口尺寸突变，ResizeObserver 偶发漏触发，
-    // 显式监听窗口 resize 强制重排版（修复 minimap/Diff 按钮区域消失）
-    const onWinResize = () => editor.layout();
-    window.addEventListener("resize", onWinResize);
+    window.addEventListener("resize", layout);
 
     return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
       ro.disconnect();
-      window.removeEventListener("resize", onWinResize);
+      window.removeEventListener("resize", layout);
       editor.dispose();
-      editorInstance = null;
+      editorRef.current = null;
     };
   }, []);
 
-  // 切换标签：切换 editor 的 Model（Model 本身常驻注册表）
+  // 当 targetUri 变化或文件内容就绪时更新 Model
   useEffect(() => {
-    const editor = editorInstance;
+    const editor = editorRef.current;
     if (!editor) return;
 
-    let placeholder: monaco.editor.ITextModel | null = null;
-    if (!activeId) {
+    if (!targetUri) {
       editor.setModel(null);
-      editor.updateOptions({ readOnly: false });
       return;
     }
-    const model = getModel(activeId);
+
+    const model = getModel(targetUri);
     if (model) {
       editor.setModel(model);
       editor.updateOptions({ readOnly: false });
+      requestAnimationFrame(() => editor.layout());
     } else {
-      // 错误占位标签（二进制/读取失败）：显示只读占位
-      const tab = tabsStore.getState().tabs.find((t) => t.uri === activeId);
-      placeholder = monaco.editor.createModel(
-        tab?.error ?? "无法显示内容",
-        "plaintext",
-      );
-      editor.setModel(placeholder);
-      editor.updateOptions({ readOnly: true });
+      editor.setModel(null);
     }
-    return () => {
-      placeholder?.dispose();
+  }, [targetUri, activeTab?.error, activeTab?.mtimeMs]);
+
+  // 监听 Model 异步创建完成事件（远程 SSH / WSL 读取完成后派发）
+  useEffect(() => {
+    const handleModelCreated = (e: Event) => {
+      const detail = (e as CustomEvent<{ uri: string }>).detail;
+      if (detail && detail.uri === targetUri && editorRef.current) {
+        const m = getModel(targetUri);
+        if (m) {
+          editorRef.current.setModel(m);
+          editorRef.current.updateOptions({ readOnly: false });
+          requestAnimationFrame(() => editorRef.current?.layout());
+        }
+      }
     };
-  }, [activeId]);
+    window.addEventListener("glance:model-created", handleModelCreated);
+    return () => window.removeEventListener("glance:model-created", handleModelCreated);
+  }, [targetUri]);
 
   // 搜索跳转定位
   const pendingReveal = tabsStore((s) => s.pendingReveal);
   useEffect(() => {
-    const editor = editorInstance;
+    const editor = editorRef.current;
     if (!editor || !pendingReveal) return;
-    if (pendingReveal.uri === activeId) {
+    if (pendingReveal.uri === targetUri) {
       editor.revealLineInCenter(pendingReveal.line);
       editor.setPosition({ lineNumber: pendingReveal.line, column: 1 });
       editor.focus();
+      tabsStore.getState().consumeReveal();
     }
-    tabsStore.getState().consumeReveal();
-  }, [pendingReveal, activeId]);
+  }, [pendingReveal, targetUri]);
 
-  return <div ref={containerRef} className="h-full w-full" />;
+  // 如果标签加载失败，提供友好的错误提示与重试按钮（以覆盖层形式显示，保证编辑器容器始终挂载）
+  return (
+    <div className="relative flex-1 w-full min-h-0 overflow-hidden flex flex-col">
+      <div ref={containerRef} className="absolute inset-0" />
+      {activeTab?.error && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-zinc-950 p-6 text-center text-zinc-400 select-text">
+          <div className="mb-3 rounded-full bg-red-950/80 p-3 text-red-400 border border-red-800/60">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+          <p className="text-sm font-semibold text-zinc-200">无法打开文件</p>
+          <p className="mt-1.5 max-w-md text-xs text-red-400/90 font-mono break-all">{activeTab.error}</p>
+          <button
+            onClick={() => void tabsStore.getState().reopenFile(activeTab.path, activeTab.uri)}
+            className="mt-4 rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 transition-colors"
+          >
+            重新尝试加载
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

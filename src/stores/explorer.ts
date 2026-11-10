@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { FileEntryDto } from "../types/ipc";
 import { filesApi } from "../services/files";
+import { workspaceApi } from "../services/workspace";
 
 /**
  * 文件树状态：childrenMap 缓存目录列表，按需懒加载。
@@ -49,12 +50,19 @@ export const explorerStore = create<ExplorerState>()((set, get) => ({
 
   openRoot: async (path) => {
     localStorage.setItem(ROOT_KEY, path);
+    if (!path.startsWith("remote://")) {
+      void workspaceApi.setUiState("workspace.lastSshProfileId", "").catch(() => {});
+      localStorage.removeItem("glance.lastSshProfileId");
+    }
     set({ rootPath: path, rootError: null, childrenMap: {}, expanded: { [path]: true } });
     await get().ensureLoaded(path);
   },
 
   closeRoot: () => {
     localStorage.removeItem(ROOT_KEY);
+    void workspaceApi.setUiState("workspace.root", "").catch(() => {});
+    void workspaceApi.setUiState("workspace.lastSshProfileId", "").catch(() => {});
+    localStorage.removeItem("glance.lastSshProfileId");
     set({ rootPath: null, childrenMap: {}, expanded: {}, selectedPath: null, rootError: null });
   },
 

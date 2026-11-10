@@ -1,6 +1,7 @@
 //! 文件系统 Commands（M3 起按 URI 调度）：
 //! - 本地：普通路径或 `local://<path>` → LocalFileSystem
 //! - 远程：`remote://<device-uuid><path>` → 该设备活跃会话的 SftpFileSystem
+//! - WSL：`wsl://<distro><path>` → 本地 UNC 虚拟文件系统
 //! 业务在 `filesystem` 模块；此处仅做 URI 解析与 Provider 路由。
 
 use std::sync::Arc;
@@ -30,7 +31,21 @@ async fn resolve(
                 .await
                 .ok_or_else(|| FsError::NotFound("设备会话未连接，请先连接".into()))?;
             let provider = entry.ensure_sftp().await.map_err(FsError::Io)?;
-            Ok((provider, path))
+            let clean = path.replace('\\', "/");
+            Ok((provider, clean))
+        }
+        ResourceUri::Wsl { distro, path } => {
+            #[cfg(windows)]
+            {
+                let win_path = path.replace('/', "\\");
+                let unc_path = format!(r"\\wsl.localhost\{distro}{win_path}");
+                Ok((state.fs.clone(), unc_path))
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (distro, path);
+                Err(FsError::InvalidPath("WSL 仅在 Windows 环境下可用".into()))
+            }
         }
     }
 }
@@ -40,14 +55,79 @@ pub async fn list_dir(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<Vec<FileEntry>, FsError> {
-    let (provider, real) = resolve(&state, &path).await?;
-    provider.list_dir(&real).await
+    let parsed = ResourceUri::parse(&path).map_err(FsError::InvalidPath)?;
+    match parsed {
+        ResourceUri::Local { path } => {
+            let (provider, real) = (state.fs.clone(), path);
+            provider.list_dir(&real).await
+        }
+        ResourceUri::Remote {
+            device_identity_id,
+            path: real,
+        } => {
+            let entry = state
+                .sessions
+                .find_by_device(&device_identity_id)
+                .await
+                .ok_or_else(|| FsError::NotFound("设备会话未连接，请先连接".into()))?;
+            let provider = entry.ensure_sftp().await.map_err(FsError::Io)?;
+            let clean_real = real.replace('\\', "/");
+            let mut entries = provider.list_dir(&clean_real).await?;
+            for item in &mut entries {
+                let clean = item.path.replace('\\', "/");
+                let p = if clean.starts_with('/') {
+                    clean
+                } else {
+                    format!("/{clean}")
+                };
+                item.path = format!("remote://{}{}", device_identity_id, p);
+            }
+            Ok(entries)
+        }
+        ResourceUri::Wsl { distro, path } => {
+            #[cfg(windows)]
+            {
+                let win_path = path.replace('/', "\\");
+                let unc_path = format!(r"\\wsl.localhost\{distro}{win_path}");
+                let mut entries = state.fs.list_dir(&unc_path).await?;
+                let unc_prefix = format!(r"\\wsl.localhost\{distro}");
+                let unc_prefix_alt = format!(r"\\wsl$\{distro}");
+                for item in &mut entries {
+                    let subpath = if let Some(stripped) = item.path.strip_prefix(&unc_prefix) {
+                        stripped.replace('\\', "/")
+                    } else if let Some(stripped) = item.path.strip_prefix(&unc_prefix_alt) {
+                        stripped.replace('\\', "/")
+                    } else {
+                        if path.ends_with('/') {
+                            format!("{}{}", path, item.name)
+                        } else {
+                            format!("{}/{}", path, item.name)
+                        }
+                    };
+                    let normalized = if subpath.starts_with('/') {
+                        subpath
+                    } else {
+                        format!("/{subpath}")
+                    };
+                    item.path = format!("wsl://{}{}", distro, normalized);
+                }
+                Ok(entries)
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (distro, path);
+                Err(FsError::InvalidPath("WSL 仅在 Windows 环境下可用".into()))
+            }
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn read_file(state: State<'_, AppState>, path: String) -> Result<FileContent, FsError> {
     let (provider, real) = resolve(&state, &path).await?;
-    provider.read_file(&real).await
+    let mut content = provider.read_file(&real).await?;
+    content.path = path;
+    Ok(content)
 }
 
 #[tauri::command]
@@ -79,29 +159,12 @@ pub async fn rename_entry(
     from: String,
     to: String,
 ) -> Result<(), FsError> {
-    let (provider, from_real) = resolve(&state, &from).await?;
-    let to_parsed = ResourceUri::parse(&to).map_err(FsError::InvalidPath)?;
-    // 跨 Provider 重命名不支持（本地 ↔ 远程）
-    match to_parsed {
-        ResourceUri::Local { .. } => {
-            let (_, to_real) = resolve(&state, &to).await?;
-            provider.rename(&from_real, &to_real).await
-        }
-        ResourceUri::Remote { device_identity_id, path } => {
-            let to_provider = state
-                .sessions
-                .find_by_device(&device_identity_id)
-                .await
-                .ok_or_else(|| FsError::NotFound("设备会话未连接".into()))?
-                .ensure_sftp()
-                .await
-                .map_err(FsError::Io)?;
-            if !Arc::ptr_eq(&provider, &(to_provider.clone() as Arc<dyn FileSystemProvider>)) {
-                return Err(FsError::InvalidPath("不支持跨文件系统重命名".into()));
-            }
-            to_provider.rename(&from_real, &path).await
-        }
+    let (from_provider, from_real) = resolve(&state, &from).await?;
+    let (to_provider, to_real) = resolve(&state, &to).await?;
+    if !Arc::ptr_eq(&from_provider, &to_provider) {
+        return Err(FsError::InvalidPath("不支持跨文件系统重命名".into()));
     }
+    from_provider.rename(&from_real, &to_real).await
 }
 
 #[tauri::command]

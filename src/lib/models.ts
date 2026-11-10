@@ -8,10 +8,10 @@ import { tabsStore } from "../stores/tabs";
  * - 远程资源（M3）将使用 remote://<device-identity-id>/<path>，天然按设备隔离
  */
 
-/** 资源路径 → Model URI（§5.3）：远程 remote:// 本身即稳定 URI；本地加 local:// 前缀 */
+/** 资源路径 → Model URI（§5.3）：远程 remote:// 与 wsl:// 本身即稳定 URI；本地加 local:// 前缀 */
 export function toModelUri(path: string): string {
-  if (path.startsWith("remote://")) return path;
   const normalized = path.replace(/\\/g, "/");
+  if (normalized.startsWith("remote://") || normalized.startsWith("wsl://")) return normalized;
   return `local://${normalized}`;
 }
 
@@ -40,10 +40,19 @@ export function getOrCreateModel(
   const existing = registry.get(uri);
   if (existing) return existing.model;
 
+  const parsedUri = monaco.Uri.parse(uri);
+  const monacoExisting = monaco.editor.getModel(parsedUri);
+  if (monacoExisting) {
+    monacoExisting.setValue(initialValue);
+    const changeSub = monacoExisting.onDidChangeContent(() => onModelContent(uri));
+    registry.set(uri, { model: monacoExisting, changeSub });
+    return monacoExisting;
+  }
+
   const model = monaco.editor.createModel(
     initialValue,
     languageForFileName(fileName),
-    monaco.Uri.parse(uri),
+    parsedUri,
   );
   const changeSub = model.onDidChangeContent(() => onModelContent(uri));
   registry.set(uri, { model, changeSub });

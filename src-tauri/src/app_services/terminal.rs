@@ -3,6 +3,7 @@
 //! - exec：无 PTY 执行构建命令；stdout/stderr 经 ExtendedData 原生分离；
 //!   exit code 经 ChannelMsg::ExitStatus 获得
 //! - 数据经 Tauri Channel 流式推送（§3.4：长输出用 Channel 而非逐条 Event）
+//! - 支持远程 SSH PTY、本机终端（PowerShell/Bash）以及 WSL 终端
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -13,7 +14,6 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::app_services::ssh_sessions::SessionManager;
-
 
 /// 事件汇：终端/任务输出统一走此回调（命令层用 Tauri Channel 实现，测试用闭包）
 pub type EventSink = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
@@ -179,6 +179,160 @@ pub async fn open_pty(
     Ok(TerminalInfo { channel_id, session_id })
 }
 
+/// 打开通用本地进程终端
+async fn open_process_terminal(
+    registry: Arc<TerminalRegistry>,
+    program: &str,
+    args: &[&str],
+    cwd: Option<&str>,
+    output: EventSink,
+) -> Result<TerminalInfo, String> {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    if let Some(dir) = cwd {
+        if !dir.is_empty() {
+            cmd.current_dir(dir);
+        }
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动终端进程失败 ({program}): {e}"))?;
+
+    let mut stdout = child.stdout.take().ok_or("无法捕获 stdout")?;
+    let mut stderr = child.stderr.take().ok_or("无法捕获 stderr")?;
+    let mut stdin = child.stdin.take().ok_or("无法捕获 stdin")?;
+
+    let channel_id = Uuid::new_v4();
+    let (tx, mut rx) = mpsc::channel::<TerminalCommand>(64);
+    registry.insert(
+        channel_id,
+        TerminalEntry {
+            commands: tx,
+            session_id: Uuid::nil(),
+            device_identity_id: Uuid::nil(),
+        },
+    );
+
+    // Stdout 读取
+    {
+        let output = output.clone();
+        tauri::async_runtime::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = vec![0u8; 4096];
+            loop {
+                match stdout.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        send_data(&output, "data", &buf[..n]);
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    // Stderr 读取
+    {
+        let output = output.clone();
+        tauri::async_runtime::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = vec![0u8; 4096];
+            loop {
+                match stderr.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        send_data(&output, "data", &buf[..n]);
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    // Stdin 写入与生命周期
+    {
+        let registry = registry.clone();
+        let cid = channel_id;
+        let output = output.clone();
+        tauri::async_runtime::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    TerminalCommand::Write(mut data) => {
+                        #[cfg(windows)]
+                        if data == b"\r" {
+                            data = b"\r\n".to_vec();
+                        }
+                        if stdin.write_all(&data).await.is_err() {
+                            break;
+                        }
+                        let _ = stdin.flush().await;
+                    }
+                    TerminalCommand::Resize { .. } => {}
+                    TerminalCommand::Close => {
+                        let _ = child.kill().await;
+                        break;
+                    }
+                }
+            }
+            registry.remove(&cid);
+            output(serde_json::json!({ "type": "closed" }));
+        });
+    }
+
+    Ok(TerminalInfo {
+        channel_id,
+        session_id: Uuid::nil(),
+    })
+}
+
+/// 打开本机终端（Windows: powershell.exe, Unix: bash/sh）
+pub async fn open_local_terminal(
+    registry: Arc<TerminalRegistry>,
+    cwd: Option<&str>,
+    output: EventSink,
+) -> Result<TerminalInfo, String> {
+    #[cfg(windows)]
+    let (prog, args) = ("powershell.exe", vec!["-NoLogo"]);
+    #[cfg(not(windows))]
+    let (prog, args) = ("bash", vec![]);
+
+    open_process_terminal(registry, prog, &args, cwd, output).await
+}
+
+/// 打开指定 WSL 发行版的终端
+pub async fn open_wsl_terminal(
+    registry: Arc<TerminalRegistry>,
+    distro: &str,
+    cwd: Option<&str>,
+    output: EventSink,
+) -> Result<TerminalInfo, String> {
+    #[cfg(windows)]
+    {
+        let mut args = vec!["-d", distro];
+        if let Some(dir) = cwd {
+            if !dir.is_empty() {
+                args.push("--cd");
+                args.push(dir);
+            }
+        }
+        open_process_terminal(registry, "wsl.exe", &args, None, output).await
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (registry, distro, cwd, output);
+        Err("WSL 终端仅在 Windows 环境下可用".into())
+    }
+}
+
 /// 执行远程命令（无 PTY，§7.2 BuildTask 执行器）。
 /// stdout/stderr 分离推送；exit code 来自 SSH ExitStatus 语义。
 pub async fn run_exec(
@@ -214,7 +368,8 @@ pub async fn run_exec(
 
     let mut exit_code: Option<i32> = None;
     let mut saw_eof = false;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    // 远程构建任务超时设置为 30 分钟，避免大工程构建被过早中断
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1800);
 
     // 单一 wait 循环复用：Data→stdout，ExtendedData→stderr，ExitStatus→退出码
     loop {

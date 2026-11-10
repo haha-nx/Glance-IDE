@@ -36,16 +36,17 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
   const initialPort = existing?.port ?? prefill?.port ?? 22;
 
   function submit() {
-    const name = nameRef.current?.value.trim() ?? "";
+    const rawName = nameRef.current?.value.trim() ?? "";
     const host = hostRef.current?.value.trim() ?? "";
+    const name = rawName || host; // 选填项，不填则直接显示 IP
     const username = usernameRef.current?.value.trim() ?? "";
     const port = Math.max(1, Math.min(65535, Number(portRef.current?.value) || 22));
     const password = passwordRef.current?.value ?? "";
     const keyPath = keyPathRef.current?.value.trim() ?? "";
     const keyPass = keyPassRef.current?.value ?? "";
 
-    if (!name || !host || !username) {
-      alert("名称、主机、用户名不能为空");
+    if (!host || !username) {
+      alert("主机与用户名不能为空");
       return;
     }
     if (authMethod === "password" && !existing && !password) {
@@ -89,12 +90,12 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
     >
       <div className="space-y-3">
         <div>
-          <label className={labelClass}>名称</label>
+          <label className={labelClass}>配置名称（选填，留空则默认显示主机 IP）</label>
           <input
             ref={nameRef}
             autoFocus
             defaultValue={existing?.name ?? ""}
-            placeholder="树莓派通用连接"
+            placeholder="选填，留空显示 IP"
             className={inputClass}
           />
         </div>
@@ -123,7 +124,7 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
           <input
             ref={usernameRef}
             defaultValue={existing?.username ?? ""}
-            placeholder="pi"
+            placeholder="root / 用户名"
             className={inputClass}
           />
         </div>
@@ -172,7 +173,7 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
               <input
                 ref={keyPathRef}
                 defaultValue={existing?.keyPath ?? ""}
-                placeholder="/Users/you/.ssh/id_ed25519"
+                placeholder="~/.ssh/id_ed25519"
                 className={`${inputClass} select-text font-mono text-xs`}
               />
             </div>

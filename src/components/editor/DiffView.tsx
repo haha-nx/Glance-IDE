@@ -15,6 +15,8 @@ export function DiffView({ uri, onClose }: { uri: string; onClose: () => void })
   useEffect(() => {
     let disposed = false;
     let diff: monaco.editor.IStandaloneDiffEditor | null = null;
+    let originalModel: monaco.editor.ITextModel | null = null;
+    let modifiedModel: monaco.editor.ITextModel | null = null;
 
     (async () => {
       const tab = tabsStore.getState().tabs.find((t) => t.uri === uri);
@@ -27,6 +29,8 @@ export function DiffView({ uri, onClose }: { uri: string; onClose: () => void })
         const original = monaco.editor.createModel(disk.binary ? "" : (disk.text ?? ""), lang);
         const current = getModel(uri);
         const modified = monaco.editor.createModel(current?.getValue() ?? "", lang);
+        originalModel = original;
+        modifiedModel = modified;
         diff = monaco.editor.createDiffEditor(containerRef.current, {
           theme: "glance-dark",
           readOnly: true,
@@ -43,6 +47,8 @@ export function DiffView({ uri, onClose }: { uri: string; onClose: () => void })
     return () => {
       disposed = true;
       diff?.dispose();
+      originalModel?.dispose();
+      modifiedModel?.dispose();
     };
   }, [uri]);
 
