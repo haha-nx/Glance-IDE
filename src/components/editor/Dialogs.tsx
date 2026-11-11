@@ -65,7 +65,7 @@ export function SaveConflictModal() {
       </p>
       <p className="text-xs text-zinc-500">远端最后修改时间：{remoteTime}</p>
       <p className="mt-2 text-xs text-amber-500">
-        建议先「取消」，用 Diff 工具比较后再决定（Diff 视图将在 M1 后续任务提供）。
+        请确认是否使用当前编辑器内容覆盖磁盘文件，或加载磁盘最新版本。
       </p>
     </Modal>
   );

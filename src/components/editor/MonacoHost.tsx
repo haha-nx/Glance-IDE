@@ -1,8 +1,9 @@
 import { useEffect, useRef } from "react";
-import { monaco, setupMonaco } from "../../lib/monaco";
+import { monaco, monacoThemeFor, setupMonaco } from "../../lib/monaco";
 import { getModel } from "../../lib/models";
 import { tabsStore } from "../../stores/tabs";
 import { uiStore } from "../../stores/ui";
+import { settingsStore } from "../../stores/settings";
 
 /** 保存快捷键与统一保存入口 */
 export function useGlobalSave() {
@@ -30,6 +31,8 @@ export function MonacoHost({ uri: customUri }: MonacoHostProps) {
   const globalActiveId = tabsStore((s) => s.activeId);
   const targetUri = customUri || globalActiveId;
   const activeTab = tabsStore((s) => s.tabs.find((t) => t.uri === targetUri));
+  const fontSize = settingsStore((s) => s.fontSize);
+  const theme = settingsStore((s) => s.theme);
   const targetUriRef = useRef(targetUri);
   targetUriRef.current = targetUri;
 
@@ -37,10 +40,11 @@ export function MonacoHost({ uri: customUri }: MonacoHostProps) {
     if (!containerRef.current) return;
     setupMonaco();
 
+    const { fontSize: initialFontSize, theme: initialTheme } = settingsStore.getState();
     const editor = monaco.editor.create(containerRef.current, {
-      theme: "glance-dark",
+      theme: monacoThemeFor(initialTheme),
       automaticLayout: true,
-      fontSize: 13,
+      fontSize: initialFontSize,
       fontFamily:
         '"SF Mono", Menlo, Monaco, "Cascadia Code", "JetBrains Mono", Consolas, monospace',
       minimap: { enabled: true, scale: 1 },
@@ -134,6 +138,15 @@ export function MonacoHost({ uri: customUri }: MonacoHostProps) {
     window.addEventListener("glance:model-created", handleModelCreated);
     return () => window.removeEventListener("glance:model-created", handleModelCreated);
   }, [targetUri]);
+
+  // 动态响应字体大小与主题变更
+  useEffect(() => {
+    editorRef.current?.updateOptions({ fontSize });
+  }, [fontSize]);
+
+  useEffect(() => {
+    monaco.editor.setTheme(monacoThemeFor(theme));
+  }, [theme]);
 
   // 搜索跳转定位
   const pendingReveal = tabsStore((s) => s.pendingReveal);

@@ -560,7 +560,7 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
             className={`flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs transition-colors ${
               tocOpen
                 ? "border-sky-500 bg-sky-600/25 text-sky-300 font-medium shadow-sm"
-                : "border-zinc-700/70 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white"
+                : "border-zinc-700/70 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
             }`}
             title="查看或收起文档大纲侧边栏"
           >

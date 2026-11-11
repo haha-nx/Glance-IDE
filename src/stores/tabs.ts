@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { FileEntryDto } from "../types/ipc";
 import { filesApi, FsError } from "../services/files";
+import { gitApi, type GitFileDiffDto, type GitFileDiffRequest } from "../services/git";
 import { getOrCreateModel, setModelValueQuiet, disposeModel, getModel, toModelUri } from "../lib/models";
 
 /**
@@ -14,6 +15,13 @@ import { getOrCreateModel, setModelValueQuiet, disposeModel, getModel, toModelUr
  * - `activeId` 始终等于活动分组的活动标签，兼容保存、标题栏、状态栏等既有逻辑。
  */
 
+export interface GitDiffTabSpec {
+  title: string;
+  uriKey: string;
+  request: GitFileDiffRequest;
+  data: GitFileDiffDto;
+}
+
 export interface EditorTab {
   /** 资源 URI，同时作为标签唯一 ID */
   uri: string;
@@ -26,6 +34,8 @@ export interface EditorTab {
   readonly: boolean;
   /** 读取失败或二进制等占位标签 */
   error?: string;
+  /** Git 文件对比标签内容（非普通磁盘编辑文件） */
+  diff?: GitDiffTabSpec;
 }
 
 export interface SaveConflict {
@@ -67,6 +77,7 @@ interface TabsState {
   openFile(entry: FileEntryDto): Promise<void>;
   openFileByPath(path: string): Promise<void>;
   openFileAtLine(path: string, line: number): Promise<void>;
+  openGitDiff(params: { title: string; uriKey: string; request: GitFileDiffRequest }): Promise<void>;
   consumeReveal(): void;
   reopenFile(path: string, uri: string): Promise<void>;
   setActive(uri: string): void;
@@ -266,6 +277,47 @@ export const tabsStore = create<TabsState>()((set, get) => ({
     set({ pendingReveal: { uri, line }, activeId: uri });
   },
 
+  openGitDiff: async ({ title, uriKey, request }) => {
+    const uri = `gitdiff://${uriKey}`;
+    const existing = get().tabs.find((t) => t.uri === uri);
+    try {
+      const data = await gitApi.fileDiff(request);
+      const tab: EditorTab = {
+        uri,
+        path: data.fileUri,
+        name: title,
+        dirty: false,
+        mtimeMs: 0,
+        readonly: true,
+        diff: {
+          title,
+          uriKey,
+          request,
+          data,
+        },
+      };
+      set((s) => ({
+        tabs: existing ? s.tabs.map((t) => (t.uri === uri ? tab : t)) : [...s.tabs, tab],
+        activeId: uri,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const errTab: EditorTab = {
+        uri,
+        path: request.path,
+        name: title,
+        dirty: false,
+        mtimeMs: 0,
+        readonly: true,
+        error: `加载文件对比失败：${message}`,
+      };
+      set((s) => ({
+        tabs: existing ? s.tabs.map((t) => (t.uri === uri ? errTab : t)) : [...s.tabs, errTab],
+        activeId: uri,
+      }));
+    }
+  },
+
   consumeReveal: () => set({ pendingReveal: null }),
 
   reopenFile: async (path, uri) => {
@@ -348,7 +400,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
   saveTab: async (uri, overwrite = false) => {
     if (get().saving) return false; // 防止快捷键双通道并发保存
     const tab = get().tabs.find((t) => t.uri === uri);
-    if (!tab || tab.error) return true;
+    if (!tab || tab.error || tab.diff) return true;
     const model = getModel(uri);
     if (!model) return true;
 

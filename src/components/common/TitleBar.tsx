@@ -204,8 +204,8 @@ export function TitleBar({
         { label: "新建文件夹", action: newFolder },
         { label: "新建窗口", shortcut: "Ctrl+Shift+N", action: newWindow },
         { separator: true, label: "" },
-        { label: "打开文件夹…", shortcut: "Ctrl+K Ctrl+O", action: () => void openFolder() },
-        { label: "打开文件…", shortcut: "Ctrl+O", action: () => void openFile() },
+        { label: "打开文件夹", shortcut: "Ctrl+K Ctrl+O", action: () => void openFolder() },
+        { label: "打开文件", shortcut: "Ctrl+O", action: () => void openFile() },
         { separator: true, label: "" },
         { label: "保存", shortcut: "Ctrl+S", action: saveCurrent },
         { label: "全部保存", shortcut: "Ctrl+Shift+S", action: saveAll },
@@ -299,6 +299,14 @@ export function TitleBar({
           },
         },
         {
+          label: "源代码管理",
+          shortcut: "Ctrl+Shift+G",
+          action: () => {
+            setActiveMenu(null);
+            window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: "git" }));
+          },
+        },
+        {
           label: "远程连接与 WSL",
           shortcut: "Ctrl+Shift+R",
           action: () => {
@@ -347,7 +355,7 @@ export function TitleBar({
   return (
     <div
       ref={barRef}
-      className="flex h-[30px] shrink-0 select-none items-center justify-between border-b border-zinc-800 bg-[#18181b] text-[12px] text-zinc-300"
+      className="flex h-[30px] shrink-0 select-none items-center justify-between border-b border-zinc-800 bg-[var(--glance-bg)] text-[12px] text-zinc-300"
     >
       {/* 左侧：Glance IDE 原始 Logo + 经典单行菜单项 */}
       <div className="flex h-full items-center">
@@ -383,7 +391,7 @@ export function TitleBar({
                     }
                   }}
                   className={`flex h-[22px] items-center px-2 text-[12px] rounded-[3px] transition-colors ${
-                    isOpen ? "bg-white/15 text-white" : "hover:bg-white/10 hover:text-white"
+                    isOpen ? "bg-zinc-800 text-zinc-100" : "hover:bg-zinc-800/70 hover:text-zinc-100"
                   }`}
                 >
                   {menu.label}
@@ -422,7 +430,7 @@ export function TitleBar({
               setActiveMenu(null);
               onNewTerminal?.();
             }}
-            className="flex h-[22px] items-center px-2 text-[12px] rounded-[3px] transition-colors hover:bg-white/10 hover:text-white"
+            className="flex h-[22px] items-center px-2 text-[12px] rounded-[3px] transition-colors hover:bg-zinc-800/70 hover:text-zinc-100"
             title="新建终端"
           >
             终端
@@ -441,11 +449,11 @@ export function TitleBar({
         </span>
       </div>
 
-      {/* 右侧：Windows 经典暗色窗口控制按钮（最小化、最大化/还原、关闭） */}
+      {/* 右侧：Windows 经典窗口控制按钮（最小化、最大化/还原、关闭） */}
       <div className="flex h-full items-center">
         <button
           onClick={handleMinimize}
-          className="flex h-full w-11 items-center justify-center text-zinc-300 hover:bg-white/10 hover:text-white transition-colors"
+          className="flex h-full w-11 items-center justify-center text-zinc-300 hover:bg-zinc-800/70 hover:text-zinc-100 transition-colors"
           title="最小化"
         >
           <svg width="10" height="1" viewBox="0 0 10 1">
@@ -455,7 +463,7 @@ export function TitleBar({
 
         <button
           onClick={handleToggleMaximize}
-          className="flex h-full w-11 items-center justify-center text-zinc-300 hover:bg-white/10 hover:text-white transition-colors"
+          className="flex h-full w-11 items-center justify-center text-zinc-300 hover:bg-zinc-800/70 hover:text-zinc-100 transition-colors"
           title={isMaximized ? "还原" : "最大化"}
         >
           {isMaximized ? (

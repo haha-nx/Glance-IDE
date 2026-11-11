@@ -32,7 +32,7 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex h-screen w-screen flex-col items-center justify-center bg-[#18181b] p-8 text-zinc-300 select-text">
+        <div className="flex h-screen w-screen flex-col items-center justify-center bg-[var(--glance-bg)] p-8 text-zinc-300 select-text">
           <div className="flex max-w-xl flex-col items-center rounded-xl border border-red-800/60 bg-zinc-900/90 p-6 shadow-2xl backdrop-blur-md">
             <div className="mb-4 rounded-full bg-red-950/80 p-3 text-red-400 border border-red-700/50">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

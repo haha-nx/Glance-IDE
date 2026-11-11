@@ -1,13 +1,134 @@
 @import "tailwindcss";
 
-:root {
+:root,
+html[data-theme="dark"] {
   --glance-bg: #18181b;
   --glance-bg-panel: #1c1c1f;
   --glance-bg-elevated: #232327;
+  --glance-bg-terminal: #131316;
+  --glance-bg-inactive: #111113;
   --glance-border: #2e2e33;
   --glance-text: #d4d4d8;
+  --glance-heading: #fafafa;
   --glance-text-dim: #8b8b93;
   --glance-accent: #38bdf8;
+  --glance-code-bg: #27272a;
+  --glance-pre-bg: #131316;
+  --glance-th-bg: #232327;
+  --glance-quote-border: #3f3f46;
+  --glance-scrollbar: #3f3f46;
+  --glance-scrollbar-hover: #52525b;
+  --glance-font-size: 13px;
+  color-scheme: dark;
+}
+
+html[data-theme="midnight"] {
+  --glance-bg: #111827;
+  --glance-bg-panel: #0f172a;
+  --glance-bg-elevated: #1e293b;
+  --glance-bg-terminal: #090d16;
+  --glance-bg-inactive: #0b0f19;
+  --glance-border: #1e293b;
+  --glance-text: #cbd5e1;
+  --glance-heading: #f8fafc;
+  --glance-text-dim: #94a3b8;
+  --glance-accent: #38bdf8;
+  --glance-code-bg: #1e293b;
+  --glance-pre-bg: #090d16;
+  --glance-th-bg: #1e293b;
+  --glance-quote-border: #334155;
+  --glance-scrollbar: #334155;
+  --glance-scrollbar-hover: #475569;
+
+  --color-zinc-50: #f8fafc;
+  --color-zinc-100: #f1f5f9;
+  --color-zinc-200: #e2e8f0;
+  --color-zinc-300: #cbd5e1;
+  --color-zinc-400: #94a3b8;
+  --color-zinc-500: #64748b;
+  --color-zinc-600: #475569;
+  --color-zinc-700: #334155;
+  --color-zinc-800: #1e293b;
+  --color-zinc-900: #111827;
+  --color-zinc-950: #0b0f19;
+  color-scheme: dark;
+}
+
+html[data-theme="nord"] {
+  --glance-bg: #2e3440;
+  --glance-bg-panel: #2b303b;
+  --glance-bg-elevated: #3b4252;
+  --glance-bg-terminal: #232831;
+  --glance-bg-inactive: #242933;
+  --glance-border: #3b4252;
+  --glance-text: #d8dee9;
+  --glance-heading: #eceff4;
+  --glance-text-dim: #9aa7bd;
+  --glance-accent: #88c0d0;
+  --glance-code-bg: #3b4252;
+  --glance-pre-bg: #232831;
+  --glance-th-bg: #3b4252;
+  --glance-quote-border: #4c566a;
+  --glance-scrollbar: #4c566a;
+  --glance-scrollbar-hover: #616e88;
+
+  --color-zinc-50: #f8fafc;
+  --color-zinc-100: #eceff4;
+  --color-zinc-200: #e5e9f0;
+  --color-zinc-300: #d8dee9;
+  --color-zinc-400: #b2bdd0;
+  --color-zinc-500: #8895ac;
+  --color-zinc-600: #616e88;
+  --color-zinc-700: #4c566a;
+  --color-zinc-800: #3b4252;
+  --color-zinc-900: #2e3440;
+  --color-zinc-950: #242933;
+  --color-sky-300: #8fbcbb;
+  --color-sky-400: #88c0d0;
+  --color-sky-500: #81a1c1;
+  --color-sky-600: #5e81ac;
+  color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  --glance-bg: #f8fafc;
+  --glance-bg-panel: #ffffff;
+  --glance-bg-elevated: #f1f5f9;
+  --glance-bg-terminal: #f8fafc;
+  --glance-bg-inactive: #eef2f6;
+  --glance-border: #e2e8f0;
+  --glance-text: #1e293b;
+  --glance-heading: #0f172a;
+  --glance-text-dim: #64748b;
+  --glance-accent: #0284c7;
+  --glance-code-bg: #f1f5f9;
+  --glance-pre-bg: #f1f5f9;
+  --glance-th-bg: #f1f5f9;
+  --glance-quote-border: #cbd5e1;
+  --glance-scrollbar: #cbd5e1;
+  --glance-scrollbar-hover: #94a3b8;
+
+  --color-zinc-50: #020617;
+  --color-zinc-100: #09090b;
+  --color-zinc-200: #18181b;
+  --color-zinc-300: #1e293b;
+  --color-zinc-400: #475569;
+  --color-zinc-500: #64748b;
+  --color-zinc-600: #94a3b8;
+  --color-zinc-700: #cbd5e1;
+  --color-zinc-800: #e2e8f0;
+  --color-zinc-900: #ffffff;
+  --color-zinc-950: #f1f5f9;
+
+  --color-sky-300: #0369a1;
+  --color-sky-400: #0284c7;
+  --color-amber-300: #b45309;
+  --color-amber-400: #d97706;
+  --color-emerald-300: #047857;
+  --color-emerald-400: #059669;
+  --color-red-300: #b91c1c;
+  --color-red-400: #dc2626;
+  color-scheme: light;
 }
 
 html,
@@ -31,13 +152,13 @@ body,
   height: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #3f3f46;
+  background: var(--glance-scrollbar);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #52525b;
+  background: var(--glance-scrollbar-hover);
   background-clip: content-box;
 }
 *::-webkit-scrollbar-track {
@@ -49,8 +170,9 @@ body,
 
 /* Markdown 预览（M1） */
 .markdown-body {
+  font-size: var(--glance-font-size, 13px);
   line-height: 1.65;
-  color: #d4d4d8;
+  color: var(--glance-text);
   word-wrap: break-word;
   user-select: text;
 }
@@ -60,17 +182,17 @@ body,
 .markdown-body h4 {
   margin: 1.2em 0 0.5em;
   font-weight: 600;
-  color: #fafafa;
+  color: var(--glance-heading);
   line-height: 1.3;
 }
 .markdown-body h1 {
   font-size: 1.7em;
-  border-bottom: 1px solid #2e2e33;
+  border-bottom: 1px solid var(--glance-border);
   padding-bottom: 0.3em;
 }
 .markdown-body h2 {
   font-size: 1.4em;
-  border-bottom: 1px solid #2e2e33;
+  border-bottom: 1px solid var(--glance-border);
   padding-bottom: 0.25em;
 }
 .markdown-body h3 {
@@ -80,7 +202,7 @@ body,
   margin: 0.7em 0;
 }
 .markdown-body a {
-  color: #38bdf8;
+  color: var(--glance-accent);
   text-decoration: none;
 }
 .markdown-body a:hover {
@@ -89,13 +211,13 @@ body,
 .markdown-body code {
   font-family: "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.88em;
-  background: #27272a;
+  background: var(--glance-code-bg);
   border-radius: 4px;
   padding: 0.15em 0.4em;
 }
 .markdown-body pre {
-  background: #131316;
-  border: 1px solid #2e2e33;
+  background: var(--glance-pre-bg);
+  border: 1px solid var(--glance-border);
   border-radius: 8px;
   padding: 0.9em 1.1em;
   overflow-x: auto;
@@ -121,8 +243,8 @@ body,
   list-style: decimal;
 }
 .markdown-body blockquote {
-  border-left: 3px solid #3f3f46;
-  color: #a1a1aa;
+  border-left: 3px solid var(--glance-quote-border);
+  color: var(--glance-text-dim);
   padding: 0.1em 0 0.1em 1em;
   margin: 0.8em 0;
 }
@@ -133,12 +255,12 @@ body,
 }
 .markdown-body th,
 .markdown-body td {
-  border: 1px solid #3f3f46;
+  border: 1px solid var(--glance-quote-border);
   padding: 0.4em 0.8em;
   text-align: left;
 }
 .markdown-body th {
-  background: #232327;
+  background: var(--glance-th-bg);
 }
 .markdown-body img {
   max-width: 100%;
@@ -146,7 +268,7 @@ body,
 }
 .markdown-body hr {
   border: none;
-  border-top: 1px solid #2e2e33;
+  border-top: 1px solid var(--glance-border);
   margin: 1.4em 0;
 }
 .markdown-body input[type="checkbox"] {

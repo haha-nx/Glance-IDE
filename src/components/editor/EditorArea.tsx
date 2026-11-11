@@ -7,8 +7,8 @@ import { explorerStore } from "../../stores/explorer";
 import { getModel } from "../../lib/models";
 import { TabBar } from "./TabBar";
 import { MonacoHost } from "./MonacoHost";
+import { GitDiffView } from "./GitDiffView";
 import { MarkdownWysiwyg } from "../markdown/MarkdownWysiwyg";
-import { DiffView } from "./DiffView";
 import { SettingsModal } from "../common/SettingsModal";
 
 /**
@@ -135,28 +135,19 @@ function EditorGroupView({ groupId }: { groupId: string }) {
   const target = tabDragStore((s) => (s.target?.groupId === groupId ? s.target : null));
 
   const [mdModes, setMdModes] = useState<Record<string, "preview" | "source">>({});
-  const [diffOpen, setDiffOpen] = useState(false);
 
   const active = tabs.find((t) => t.uri === group?.activeUri);
-  const isMarkdown = !!active && !active.error && /\.(md|markdown)$/i.test(active.name);
+  const isDiff = !!active?.diff;
+  const isMarkdown = !!active && !active.error && !isDiff && /\.(md|markdown)$/i.test(active.name);
   const mdMode = active ? (mdModes[active.uri] ?? "preview") : "preview";
   const setMdMode = (m: "preview" | "source") => {
     if (active) setMdModes((s) => ({ ...s, [active.uri]: m }));
   };
 
-  useEffect(() => {
-    setDiffOpen(false);
-  }, [group?.activeUri]);
-
   const modeSwitch = isMarkdown ? <MdModeSwitch mode={mdMode} onChange={setMdMode} /> : null;
 
   const actions: ReactNode = active ? (
     <>
-      {!active.error && (
-        <ModeButton active={diffOpen} onClick={() => setDiffOpen((v) => !v)} title="与磁盘版本对比">
-          Diff
-        </ModeButton>
-      )}
       <button
         onClick={() => splitTab(active.uri, groupId, groupId, "right", true)}
         className="flex h-6 w-6 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
@@ -190,8 +181,8 @@ function EditorGroupView({ groupId }: { groupId: string }) {
           请选择或打开一个文件
         </div>
       );
-  } else if (diffOpen && !active.error) {
-    content = <DiffView uri={active.uri} onClose={() => setDiffOpen(false)} />;
+  } else if (active.diff) {
+    content = <GitDiffView key={active.uri} uri={active.uri} diff={active.diff} />;
   } else if (isMarkdown && mdMode === "preview") {
     content = <MarkdownWysiwyg key={active.uri} uri={active.uri} headerRight={modeSwitch} />;
   } else if (isMarkdown) {

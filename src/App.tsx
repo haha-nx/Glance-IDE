@@ -5,6 +5,7 @@ import { ActivityBar } from "./components/common/ActivityBar";
 import { StatusBar } from "./components/common/StatusBar";
 import { ExplorerPanel } from "./components/explorer/ExplorerPanel";
 import { SearchPanel } from "./components/search/SearchPanel";
+import { GitPanel } from "./components/git/GitPanel";
 import { RemotePanel } from "./components/remote/RemotePanel";
 import { DiscoveryPanel } from "./components/discovery/DiscoveryPanel";
 import { EditorArea } from "./components/editor/EditorArea";
@@ -14,6 +15,15 @@ import { SaveConflictModal, UnsavedCloseModal } from "./components/editor/Dialog
 import { SettingsModal } from "./components/common/SettingsModal";
 import { tabsStore } from "./stores/tabs";
 import { explorerStore } from "./stores/explorer";
+import { gitStore } from "./stores/git";
+import {
+  clampBottomPanelHeight,
+  clampSidebarWidth,
+  DEFAULT_SETTINGS,
+  settingsStore,
+} from "./stores/settings";
+import { updaterStore } from "./stores/updater";
+import { updaterApi } from "./services/updater";
 import { workspaceApi } from "./services/workspace";
 import { appApi } from "./services/files";
 import { sshApi } from "./services/ssh";
@@ -63,7 +73,12 @@ function useWorkspacePersistence({
     hasInitializedRef.current = true;
 
     const params = new URLSearchParams(window.location.search);
-    if (params.get("blank") === "1" || params.get("connect_ssh") || params.get("connect_wsl")) {
+    if (
+      params.get("blank") === "1" ||
+      params.get("connect_ssh") ||
+      params.get("connect_wsl") ||
+      params.get("open_folder")
+    ) {
       return;
     }
 
@@ -226,8 +241,8 @@ function useWorkspacePersistence({
     const unsub = tabsStore.subscribe((s) => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        const paths = s.tabs.filter((t) => !t.error).map((t) => t.path);
-        const active = s.tabs.find((t) => t.uri === s.activeId);
+        const paths = s.tabs.filter((t) => !t.error && !t.diff).map((t) => t.path);
+        const active = s.tabs.find((t) => t.uri === s.activeId && !t.diff);
         const payload = JSON.stringify({ paths, active: active?.path ?? null });
         void workspaceApi.setUiState("workspace.tabs", payload).catch(() => {});
       }, 800);
@@ -255,10 +270,21 @@ export function App() {
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [pendingWindowClose, setPendingWindowClose] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<"appearance" | "updates" | "about">(
+    "appearance",
+  );
+  const [resizing, setResizing] = useState<"sidebar" | "bottom" | null>(null);
   const [sshReconnectFail, setSshReconnectFail] = useState<{
     profile: ConnectionProfileDto;
     reason: string;
   } | null>(null);
+
+  const sidebarWidth = settingsStore((s) => s.sidebarWidth);
+  const bottomPanelHeight = settingsStore((s) => s.bottomPanelHeight);
+  const updatePromptVisible = updaterStore((s) => s.promptVisible);
+  const updateResult = updaterStore((s) => s.result);
+  const updateDownloading = updaterStore((s) => s.downloading);
+  const updateDownloadResult = updaterStore((s) => s.downloadResult);
 
   const handleSshReconnectFailed = useCallback(
     (profile: ConnectionProfileDto, reason: string) => {
@@ -279,18 +305,160 @@ export function App() {
   useCloseGuard(() => setPendingWindowClose(true));
   useGlobalSave();
 
+  // 初始化设置，并在「自动检测更新」明确开启时后台检测 GitHub 版本更新（默认关闭时不主动检查或推送）
+  useEffect(() => {
+    let checkTimer: ReturnType<typeof setTimeout> | null = null;
+    const params = new URLSearchParams(window.location.search);
+
+    void settingsStore
+      .getState()
+      .hydrate()
+      .then((resolved) => {
+        if (resolved.autoCheckUpdate && params.get("blank") !== "1") {
+          checkTimer = setTimeout(() => {
+            void updaterStore.getState().checkForUpdates({ manual: false });
+          }, 2500);
+        }
+      });
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        setSettingsSection("appearance");
+        setSettingsOpen(true);
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
+        const k = e.key.toLowerCase();
+        if (k === "g") {
+          e.preventDefault();
+          setActivePanel("git");
+        } else if (k === "e") {
+          e.preventDefault();
+          setActivePanel("explorer");
+        } else if (k === "f") {
+          e.preventDefault();
+          setActivePanel("search");
+        } else if (k === "r") {
+          e.preventDefault();
+          setActivePanel("remote");
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      if (checkTimer) clearTimeout(checkTimer);
+    };
+  }, []);
+
+  const workspaceRootPath = explorerStore((s) => s.rootPath);
+
+  // 后台同步源代码管理状态，保持活动栏角标实时准确；保存文件或窗口恢复焦点时静默刷新
+  useEffect(() => {
+    if (!workspaceRootPath) {
+      gitStore.getState().clear();
+      return;
+    }
+    void gitStore.getState().refresh(workspaceRootPath, true);
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const prevDirty = new Map<string, boolean>();
+    for (const t of tabsStore.getState().tabs) {
+      prevDirty.set(t.uri, t.dirty);
+    }
+
+    const scheduleRefresh = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        void gitStore.getState().refresh(workspaceRootPath, true);
+      }, 300);
+    };
+
+    const unsubTabs = tabsStore.subscribe((s) => {
+      let savedTransition = false;
+      const next = new Map<string, boolean>();
+      for (const t of s.tabs) {
+        next.set(t.uri, t.dirty);
+        if (prevDirty.get(t.uri) === true && !t.dirty) {
+          savedTransition = true;
+        }
+      }
+      prevDirty.clear();
+      for (const [k, v] of next) prevDirty.set(k, v);
+      if (savedTransition) scheduleRefresh();
+    });
+
+    const onFocus = () => scheduleRefresh();
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      unsubTabs();
+      window.removeEventListener("focus", onFocus);
+      if (timer) clearTimeout(timer);
+    };
+  }, [workspaceRootPath]);
+
+  // 侧边栏与下边栏拖拽调节
+  const startSidebarResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = settingsStore.getState().sidebarWidth;
+    let latestWidth = startWidth;
+    setResizing("sidebar");
+
+    const onMove = (ev: MouseEvent) => {
+      const maxW = Math.min(600, Math.max(240, Math.floor(window.innerWidth * 0.55)));
+      latestWidth = Math.min(maxW, clampSidebarWidth(startWidth + (ev.clientX - startX)));
+      settingsStore.getState().setSidebarWidth(latestWidth, false);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setResizing(null);
+      settingsStore.getState().setSidebarWidth(latestWidth, true);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
+  const startBottomResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = settingsStore.getState().bottomPanelHeight;
+    let latestHeight = startHeight;
+    setResizing("bottom");
+
+    const onMove = (ev: MouseEvent) => {
+      const maxH = Math.max(200, Math.floor(window.innerHeight * 0.75));
+      latestHeight = Math.min(maxH, clampBottomPanelHeight(startHeight + (startY - ev.clientY)));
+      settingsStore.getState().setBottomPanelHeight(latestHeight, false);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setResizing(null);
+      settingsStore.getState().setBottomPanelHeight(latestHeight, true);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
   // 持久化活动侧边栏面板
   useEffect(() => {
     void workspaceApi.setUiState("workspace.activePanel", activePanel).catch(() => {});
     localStorage.setItem("glance.activePanel", activePanel);
   }, [activePanel]);
 
-  // 监听新窗口自连参数（?connect_ssh=... 或 ?connect_wsl=...）
+  // 监听新窗口自连与直开目录参数（?open_folder=... / ?connect_ssh=... / ?connect_wsl=...）
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const openFolder = params.get("open_folder");
     const connectSsh = params.get("connect_ssh");
     const connectWsl = params.get("connect_wsl");
-    if (connectSsh) {
+    if (openFolder) {
+      void explorerStore.getState().openRoot(openFolder);
+      setActivePanel("explorer");
+    } else if (connectSsh) {
       void (async () => {
         try {
           const outcome = await sshApi.connectProfile(connectSsh);
@@ -388,13 +556,25 @@ export function App() {
     }
   };
 
+  const showSidebar =
+    activePanel === "explorer" ||
+    activePanel === "search" ||
+    activePanel === "git" ||
+    activePanel === "remote" ||
+    activePanel === "ssh" ||
+    activePanel === "wsl" ||
+    activePanel === "discovery";
+
   return (
-    <div className="flex h-full flex-col bg-[#18181b] overflow-hidden select-none">
+    <div className="flex h-full flex-col bg-[var(--glance-bg)] overflow-hidden select-none">
       {/* 顶部单行自定义标题导航栏 */}
       <TitleBar
         onToggleTerminal={() => setBottomPanelOpen((v) => !v)}
         onNewTerminal={handleNewTerminal}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSettingsSection("appearance");
+          setSettingsOpen(true);
+        }}
         onRequestClose={() => {
           if (tabsStore.getState().hasDirty()) {
             setPendingWindowClose(true);
@@ -406,24 +586,33 @@ export function App() {
 
       <div className="flex min-h-0 flex-1">
         <ActivityBar active={activePanel} onActivate={setActivePanel} />
-        {activePanel === "explorer" && (
-          <div className="w-72 shrink-0 border-r border-zinc-800">
-            <ExplorerPanel />
-          </div>
-        )}
-        {activePanel === "search" && (
-          <div className="w-72 shrink-0 border-r border-zinc-800">
-            <SearchPanel />
-          </div>
-        )}
-        {(activePanel === "remote" || activePanel === "ssh" || activePanel === "wsl") && (
-          <div className="w-72 shrink-0 border-r border-zinc-800">
-            <RemotePanel />
-          </div>
-        )}
-        {activePanel === "discovery" && (
-          <div className="w-72 shrink-0 border-r border-zinc-800">
-            <DiscoveryPanel />
+        {showSidebar && (
+          <div
+            style={{ width: `${sidebarWidth}px` }}
+            className="relative flex min-h-0 shrink-0 flex-col border-r border-zinc-800"
+          >
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {activePanel === "explorer" && <ExplorerPanel />}
+              {activePanel === "search" && <SearchPanel />}
+              {activePanel === "git" && <GitPanel />}
+              {(activePanel === "remote" || activePanel === "ssh" || activePanel === "wsl") && (
+                <RemotePanel />
+              )}
+              {activePanel === "discovery" && <DiscoveryPanel />}
+            </div>
+            {/* 侧边栏右边缘拖拽调节手柄 */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              title="拖拽调节侧边栏宽度（双击恢复默认）"
+              onMouseDown={startSidebarResize}
+              onDoubleClick={() =>
+                settingsStore.getState().setSidebarWidth(DEFAULT_SETTINGS.sidebarWidth, true)
+              }
+              className={`absolute top-0 bottom-0 right-0 z-20 -mr-0.5 w-1.5 cursor-col-resize transition-colors ${
+                resizing === "sidebar" ? "bg-sky-500" : "hover:bg-sky-500/70"
+              }`}
+            />
           </div>
         )}
 
@@ -434,10 +623,28 @@ export function App() {
           </div>
           {bottomPanelOpen && (
             <div
-              className={`shrink-0 border-t border-zinc-800 flex flex-col ${
-                terminalMaximized ? "flex-1 h-full" : "h-64"
+              style={terminalMaximized ? undefined : { height: `${bottomPanelHeight}px` }}
+              className={`relative shrink-0 border-t border-zinc-800 flex flex-col ${
+                terminalMaximized ? "flex-1 h-full" : ""
               }`}
             >
+              {/* 下边栏上边缘拖拽调节手柄 */}
+              {!terminalMaximized && (
+                <div
+                  role="separator"
+                  aria-orientation="horizontal"
+                  title="拖拽调节下边栏高度（双击恢复默认）"
+                  onMouseDown={startBottomResize}
+                  onDoubleClick={() =>
+                    settingsStore
+                      .getState()
+                      .setBottomPanelHeight(DEFAULT_SETTINGS.bottomPanelHeight, true)
+                  }
+                  className={`absolute left-0 right-0 top-0 z-20 -mt-0.5 h-1.5 cursor-row-resize transition-colors ${
+                    resizing === "bottom" ? "bg-sky-500" : "hover:bg-sky-500/70"
+                  }`}
+                />
+              )}
               <TerminalPanel
                 onClose={() => setBottomPanelOpen(false)}
                 isMaximized={terminalMaximized}
@@ -449,14 +656,89 @@ export function App() {
       </div>
       <StatusBar onToggleTerminal={() => setBottomPanelOpen((v) => !v)} />
 
+      {/* 拖拽面板时的全局透明手势捕获层，避免 Monaco/xterm 截获鼠标移动事件 */}
+      {resizing && (
+        <div
+          className={`fixed inset-0 z-[9998] ${
+            resizing === "sidebar" ? "cursor-col-resize" : "cursor-row-resize"
+          }`}
+        />
+      )}
+
       {/* 冲突弹窗 */}
       <SaveConflictModal />
 
       {/* 关闭脏文件确认 */}
       <UnsavedCloseModal />
 
-      {/* 设置弹窗 */}
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {/* 设置界面 */}
+      {settingsOpen && (
+        <SettingsModal
+          initialSection={settingsSection}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
+      {/* 仅在「自动检测更新」开启且检测到新版本时展示的右下角更新提示 */}
+      {updatePromptVisible && updateResult?.hasUpdate && (
+        <div className="fixed bottom-9 right-4 z-40 w-80 rounded-lg border border-sky-500/50 bg-zinc-900 p-3.5 text-xs text-zinc-200 shadow-2xl">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="flex items-center gap-1.5 font-semibold text-zinc-100">
+                <span className="h-2 w-2 rounded-full bg-sky-400" />
+                <span>发现新版本 v{updateResult.latestVersion}</span>
+              </div>
+              <p className="mt-1 text-[11px] text-zinc-400">
+                当前版本 v{updateResult.currentVersion}，GitHub 端已发布新版安装包。
+              </p>
+            </div>
+            <button
+              onClick={() => updaterStore.getState().dismissPrompt()}
+              className="rounded px-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+              title="关闭"
+            >
+              ✕
+            </button>
+          </div>
+          {updateDownloadResult && (
+            <p className="mt-2 truncate rounded border border-emerald-700/50 bg-emerald-950/30 px-2 py-1 text-[11px] text-emerald-300">
+              已下载：{updateDownloadResult.savedPath}
+            </p>
+          )}
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <Button
+              onClick={() => {
+                updaterStore.getState().dismissPrompt();
+                setSettingsSection("updates");
+                setSettingsOpen(true);
+              }}
+              className="border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-[11px] text-zinc-300 hover:bg-zinc-700"
+            >
+              查看详情
+            </Button>
+            {updateDownloadResult ? (
+              <PrimaryButton
+                onClick={() =>
+                  void updaterApi.openDownloadedInstaller(updateDownloadResult.savedPath, false)
+                }
+                className="px-2.5 py-1 text-[11px]"
+              >
+                启动安装
+              </PrimaryButton>
+            ) : (
+              updateResult.assetUrl && (
+                <PrimaryButton
+                  disabled={updateDownloading}
+                  onClick={() => void updaterStore.getState().downloadLatestInstaller()}
+                  className="px-2.5 py-1 text-[11px]"
+                >
+                  {updateDownloading ? "下载中…" : "下载更新"}
+                </PrimaryButton>
+              )
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 退出应用未保存确认 */}
       {pendingWindowClose && (

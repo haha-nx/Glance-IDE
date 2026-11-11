@@ -114,11 +114,12 @@ export const appApi = {
     }
   },
 
-  async openNewWindow(profileId?: string, wslDistro?: string): Promise<void> {
+  async openNewWindow(profileId?: string, wslDistro?: string, folderPath?: string): Promise<void> {
     try {
       await invoke("open_new_window", {
         profileId: profileId || null,
         wslDistro: wslDistro || null,
+        folderPath: folderPath || null,
       });
     } catch (err) {
       console.error("新建窗口失败:", err);

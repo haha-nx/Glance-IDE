@@ -71,7 +71,38 @@
 | **恢复经典导航栏菜单** | 恢复 `文件(F)` `编辑(E)` `查看(V)` `终端` `帮助(H)` 经典紧凑单行导航结构 | ✅ 完成 | `TitleBar.tsx`：移除选择/转到/运行等冗余菜单项与多余控制图标，色调严密契合 IDE 主题 |
 | **终端按钮直接新建** | 导航栏“终端”按钮彻底取消下拉菜单，点击直接在当前活动窗格新建终端 | ✅ 完成 | `TitleBar.tsx`, `App.tsx`, `TerminalPanel.tsx`：点击直接触发新建终端，若底栏折叠则自动展开并新建 |
 
-### 0.9 2026-11-10 本机实际物理局域网网段精准探测与代理/虚拟机网卡过滤（最新交付）
+### 0.12 2026-11-11 源代码管理文件对比（Diff）与图形区远端加载修复（最新交付）
+
+根据用户新需求与反馈（「源代码管理没有文件对比，图形区无法加载远端文件」），完成 Git 文件对比视图与远程 SSH / WSL / 合并提交图谱修复：
+
+| 模块 | 升级内容 | 状态 | 核心实现与文件 |
+|---|---|---|---|
+| **源代码管理文件对比（Diff）** | 新增 `git_file_diff` 后端命令（支持 `working` 工作区 vs 暂存区、`staged` 暂存区 vs HEAD、`commit` 提交 vs 父提交三模式，并兼容重命名、删除、首次提交与二进制识别）；新增 `GitDiffView` Monaco Diff 编辑器标签页，支持并排/行内视图切换、刷新与打开工作区文件；点击「更改」「已暂存的更改」与「图形」中的文件条目即打开对比视图 | ✅ 完成 | `src-tauri/src/commands/git.rs` (`git_file_diff`), `src-tauri/src/lib.rs`, `src/services/git.ts`, `src/stores/tabs.ts` (`openGitDiff`), `src/components/editor/GitDiffView.tsx`, `src/components/editor/EditorArea.tsx`, `src/components/editor/TabBar.tsx`, `src/App.tsx` |
+| **图形区（Commit Graph）远端加载修复** | 1) 远程 SSH `run_git_at` 改为 `sh -c` POSIX 包装并改并发 `tokio::join!` 为顺序执行，避免 `MaxSessions` 通道竞争与非 POSIX 登录 Shell 解析失败；2) `exec_capture` 等待 EOF 后再结束读取；3) `git log --all` 失败自动回退当前分支并透传 `graphError` 与重试按钮；4) `git_commit_files` 加入 `-m --first-parent` 支持合并提交；5) 修复 `CommitGraph` 因刷新 `commits` 引用清空已展开文件缓存的问题，并在点击历史文件时加载修订 Diff（不再直接读工作区磁盘文件） | ✅ 完成 | `src-tauri/src/app_services/terminal.rs` (`exec_capture`), `src-tauri/src/commands/git.rs`, `src/components/git/CommitGraph.tsx`, `src/components/git/GitPanel.tsx` |
+
+### 0.11 2026-11-11 源代码管理升级为上下两栏（更改 + 图形）与移除 Diff 功能
+
+根据用户最新指示，将源代码管理侧边栏拆分为上下两部分（上部分「更改」+ 下部分「图形」），支持拖拽调整比例，同时保持移除编辑器 Diff 对比功能：
+
+| 模块 | 升级内容 | 状态 | 核心实现与文件 |
+|---|---|---|---|
+| **源代码管理（上栏：更改）** | 支持本地、WSL 与远程 SSH 仓库；包含分支切换/新建、同步（Fetch / Pull / Push / 超前落后计数）、顶部提交区（提交 / 提交并推送 / 自动暂存）、已暂存/工作区更改（暂存/取消暂存/单文件与全部放弃）、工作树（Worktrees）管理弹窗及活动栏实时更改计数角标 | ✅ 完成 | `src-tauri/src/commands/git.rs`, `src/services/git.ts`, `src/stores/git.ts`, `src/components/git/GitPanel.tsx`, `ActivityBar.tsx`, `TitleBar.tsx`, `App.tsx` |
+| **源代码管理（下栏：图形）** | 新增多分支拓扑 SVG 提交图谱（`CommitGraph`），包含未提交工作区虚线虚拟节点、分支/远程/标签徽标、合并与分叉 Bezier 轨线、全部分支/当前分支切换，以及点击提交节点按需查看变更文件并在编辑器中直接打开 | ✅ 完成 | `src-tauri/src/commands/git.rs` (`git_commit_files`), `src/components/git/CommitGraph.tsx`, `src-tauri/src/lib.rs` |
+| **移除 Diff 功能** | 去掉编辑区右上角 Diff 对比按钮并删除 `DiffView` 组件，清理冲突弹窗中的 Diff 提示文案；点击更改与提交历史文件直接打开源码/文档编辑器 | ✅ 完成 | 移除 `DiffView.tsx`, 更新 `EditorArea.tsx`, `Dialogs.tsx` |
+
+### 0.10 2026-11-11 全新设置中心（字体/主题/GitHub 更新）、面板尺寸调节与导航菜单细节打磨
+
+根据用户新需求，完成了设置界面重构、全界面多主题/字号同步、GitHub Release 版本检测与安装包下载，以及侧边栏/下边栏拖拽调宽调高功能：
+
+| 模块 | 升级内容 | 状态 | 核心实现与文件 |
+|---|---|---|---|
+| **全新设置界面（字体与主题）** | 重构设置弹窗为分栏设置中心；新增字号（10–24px）与 4 套全界面颜色主题实时切换，并持久化至本地与 SQLite | ✅ 完成 | `src/stores/settings.ts`, `SettingsModal.tsx`, `global.css`, `monaco.ts`, `MonacoHost.tsx`, `TerminalPanel.tsx` |
+| **GitHub 版本检测与下载** | 接入 GitHub Releases API 检测新版本、匹配当前平台安装包并支持下载至系统「下载」目录及启动安装 | ✅ 完成 | `src-tauri/src/commands/updater.rs`, `src/services/updater.ts`, `src/stores/updater.ts` |
+| **自动检测/下载开关（默认关闭）** | 新增「自动检测更新」与「自动下载安装包」开关，默认均关闭；关闭自动检测时除非手动检查更新否则绝不主动请求或推送 | ✅ 完成 | `settings.ts`, `updater.ts`, `SettingsModal.tsx`, `App.tsx` |
+| **侧边栏与下边栏拖拽调节** | 左侧边栏右边缘与底部终端栏上边缘增加拖拽调节手柄，支持双击恢复默认尺寸，带全局拖拽防穿透遮罩并持久化尺寸 | ✅ 完成 | `src/App.tsx`, `src/stores/settings.ts` |
+| **导航栏文件菜单去省略号** | 去掉顶部导航栏「文件(F)」下拉菜单中「打开文件夹」和「打开文件」末尾的 `…` 省略号 | ✅ 完成 | `src/components/common/TitleBar.tsx` |
+
+### 0.9 2026-11-10 本机实际物理局域网网段精准探测与代理/虚拟机网卡过滤
 
 针对“IP 搜索网段误读取代理 TUN 网段或虚拟机网卡网段”的问题，完成系统性物理路由与网卡智能过滤升级：
 

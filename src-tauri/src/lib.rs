@@ -131,6 +131,11 @@ pub fn run() {
             commands::app::exit_app,
             commands::app::close_window,
             commands::app::open_new_window,
+            // 版本检测与更新
+            commands::updater::check_github_update,
+            commands::updater::download_update_installer,
+            commands::updater::open_downloaded_installer,
+            commands::updater::open_external_url,
             // 文件系统
             commands::fs::list_dir,
             commands::fs::read_file,
@@ -181,6 +186,23 @@ pub fn run() {
             commands::terminal::terminal_close,
             commands::terminal::terminal_device,
             commands::terminal::run_remote_task,
+            // Git 与工作树（Worktrees）
+            commands::git::git_overview,
+            commands::git::git_commit_files,
+            commands::git::git_file_diff,
+            commands::git::git_init,
+            commands::git::git_stage,
+            commands::git::git_unstage,
+            commands::git::git_discard,
+            commands::git::git_discard_all,
+            commands::git::git_commit,
+            commands::git::git_checkout,
+            commands::git::git_pull,
+            commands::git::git_push,
+            commands::git::git_fetch,
+            commands::git::git_worktree_add,
+            commands::git::git_worktree_remove,
+            commands::git::git_worktree_prune,
         ])
         .on_window_event(|window, event| {
             // 主窗口关闭时回收全部 SSH 会话（§6.4 生命周期管理）

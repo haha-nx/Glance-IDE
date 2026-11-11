@@ -39,15 +39,34 @@ pub async fn close_window(
     Ok(())
 }
 
-/// 在新窗口中打开应用（可携带 SSH 配置或 WSL 发行版自连参数）
+fn url_encode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push('%');
+                out.push_str(&format!("{b:02X}"));
+            }
+        }
+    }
+    out
+}
+
+/// 在新窗口中打开应用（可携带 SSH 配置、WSL 发行版或指定文件夹路径参数）
 #[tauri::command]
 pub async fn open_new_window(
     app: tauri::AppHandle,
     profile_id: Option<String>,
     wsl_distro: Option<String>,
+    folder_path: Option<String>,
 ) -> Result<(), String> {
     let label = format!("win-{}", uuid::Uuid::new_v4().simple());
-    let query = if let Some(pid) = profile_id {
+    let query = if let Some(folder) = folder_path.filter(|s| !s.trim().is_empty()) {
+        format!("?open_folder={}", url_encode_component(&folder))
+    } else if let Some(pid) = profile_id {
         format!("?connect_ssh={pid}")
     } else if let Some(distro) = wsl_distro {
         format!("?connect_wsl={distro}")

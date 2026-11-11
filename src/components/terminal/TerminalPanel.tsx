@@ -12,10 +12,61 @@ import {
 } from "../../services/terminal";
 import { tabsStore } from "../../stores/tabs";
 import { explorerStore } from "../../stores/explorer";
+import { settingsStore, type AppTheme } from "../../stores/settings";
 import { parseProblems, resolveProblemPath, type Problem } from "../../lib/problems";
 import type { SessionDto } from "../../types/ssh";
 import type { WslDistroDto } from "../../types/wsl";
 import { IconClose } from "../common/icons";
+
+function terminalThemeFor(theme: AppTheme) {
+  switch (theme) {
+    case "midnight":
+      return {
+        background: "#090d16",
+        foreground: "#cbd5e1",
+        cursor: "#38bdf8",
+        selectionBackground: "#38bdf855",
+      };
+    case "nord":
+      return {
+        background: "#232831",
+        foreground: "#d8dee9",
+        cursor: "#88c0d0",
+        selectionBackground: "#88c0d044",
+      };
+    case "light":
+      return {
+        background: "#f8fafc",
+        foreground: "#1e293b",
+        cursor: "#0284c7",
+        cursorAccent: "#ffffff",
+        selectionBackground: "#0284c733",
+        black: "#1e293b",
+        red: "#dc2626",
+        green: "#16a34a",
+        yellow: "#ca8a04",
+        blue: "#2563eb",
+        magenta: "#9333ea",
+        cyan: "#0891b2",
+        white: "#64748b",
+        brightBlack: "#475569",
+        brightRed: "#ef4444",
+        brightGreen: "#22c55e",
+        brightYellow: "#d97706",
+        brightBlue: "#3b82f6",
+        brightMagenta: "#a855f7",
+        brightCyan: "#06b6d4",
+        brightWhite: "#0f172a",
+      };
+    default:
+      return {
+        background: "#131316",
+        foreground: "#d4d4d8",
+        cursor: "#38bdf8",
+        selectionBackground: "#38bdf855",
+      };
+  }
+}
 
 interface TermTabItem {
   id: string;
@@ -74,6 +125,8 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   const outputRef = useRef<HTMLDivElement>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const termsMapRef = useRef<Map<string, TermTabItem>>(new Map());
+  const fontSize = settingsStore((s) => s.fontSize);
+  const theme = settingsStore((s) => s.theme);
 
   // 刷新会话与 WSL 发行版
   useEffect(() => {
@@ -98,15 +151,11 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       targetPaneId?: string,
     ) => {
       const { Terminal } = await import("@xterm/xterm");
+      const { fontSize: curFontSize, theme: curTheme } = settingsStore.getState();
       const term = new Terminal({
         fontFamily: '"SF Mono", Menlo, Consolas, monospace',
-        fontSize: 12,
-        theme: {
-          background: "#131316",
-          foreground: "#d4d4d8",
-          cursor: "#38bdf8",
-          selectionBackground: "#38bdf855",
-        },
+        fontSize: curFontSize,
+        theme: terminalThemeFor(curTheme),
         cursorBlink: true,
         scrollback: 5000,
       });
@@ -470,6 +519,28 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
     };
   }, [panes, isMaximized]);
 
+  // 实时同步全部终端字体大小与配色主题
+  useEffect(() => {
+    const xtermTheme = terminalThemeFor(theme);
+    for (const item of termsMapRef.current.values()) {
+      item.term.options.fontSize = fontSize;
+      item.term.options.theme = xtermTheme;
+    }
+    requestAnimationFrame(() => {
+      for (const p of panes) {
+        if (p.activeId) {
+          const item = termsMapRef.current.get(p.activeId);
+          if (item) {
+            try {
+              item.fit.fit();
+              void terminalApi.resize(item.channelId, item.term.cols, item.term.rows);
+            } catch {}
+          }
+        }
+      }
+    });
+  }, [fontSize, theme]);
+
   // 计算拖放目标
   function computeDropTarget(x: number, y: number): TermDragState["target"] {
     const el = document.elementFromPoint(x, y) as HTMLElement | null;
@@ -788,7 +859,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
                   {/* 窗格终端画布区 */}
                   <div
                     data-term-body-pane={pane.id}
-                    className="relative min-h-0 flex-1 w-full h-full overflow-hidden"
+                    className="relative min-h-0 flex-1 w-full h-full overflow-hidden bg-[var(--glance-bg-terminal)]"
                   >
                     {paneTabs.length === 0 ? (
                       <div className="flex h-full w-full items-center justify-center p-4 text-xs text-zinc-600">
@@ -861,7 +932,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
           </div>
           <div
             ref={outputRef}
-            className="min-h-0 flex-1 overflow-auto rounded bg-[#131316] p-2 font-mono text-[11px] text-zinc-300"
+            className="min-h-0 flex-1 overflow-auto rounded bg-[var(--glance-bg-terminal)] p-2 font-mono text-[11px] text-zinc-300"
           >
             <pre className="whitespace-pre-wrap">{taskOutput || "（暂无任务输出）"}</pre>
           </div>

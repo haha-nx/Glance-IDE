@@ -109,7 +109,7 @@ export function TabBar({ groupId, actions }: TabBarProps) {
     .filter((t): t is NonNullable<typeof t> => !!t);
 
   return (
-    <div className={`flex h-9 shrink-0 items-stretch border-b border-zinc-800 ${isActiveGroup ? "bg-zinc-950" : "bg-[#111113]"}`}>
+    <div className={`flex h-9 shrink-0 items-stretch border-b border-zinc-800 ${isActiveGroup ? "bg-zinc-950" : "bg-[var(--glance-bg-inactive)]"}`}>
       <div
         data-tabbar-group={groupId}
         className={`flex min-w-0 flex-1 items-stretch overflow-x-auto ${dropTarget ? "bg-sky-500/10" : ""}`}
@@ -131,7 +131,7 @@ export function TabBar({ groupId, actions }: TabBarProps) {
                 if (e.button === 1) closeInGroup(groupId, tab.uri);
               }}
               title={tab.path}
-              className={`group relative flex min-w-28 max-w-56 shrink-0 cursor-pointer items-center gap-1.5 border-r border-zinc-800 px-3 text-[13px] ${indicator} ${
+              className={`group relative flex min-w-28 max-w-64 shrink-0 cursor-pointer items-center gap-1.5 border-r border-zinc-800 px-3 text-[13px] ${indicator} ${
                 isActive
                   ? `bg-zinc-900 ${isActiveGroup ? "text-zinc-100" : "text-zinc-400"}`
                   : "text-zinc-500 hover:text-zinc-300"
@@ -141,6 +141,10 @@ export function TabBar({ groupId, actions }: TabBarProps) {
               {tab.error ? (
                 <span className="text-red-400">
                   <IconWarning size={14} />
+                </span>
+              ) : tab.diff ? (
+                <span className="shrink-0 font-mono text-[11px] text-sky-400" title="文件对比">
+                  ⇄
                 </span>
               ) : (
                 <span className={`h-2 w-2 shrink-0 rounded-full ${tab.dirty ? "bg-amber-400" : "bg-transparent"}`} />

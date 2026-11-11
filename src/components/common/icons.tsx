@@ -205,3 +205,16 @@ export function IconWsl(p: IconProps) {
     </Svg>
   );
 }
+
+/** Git 分支 / 工作树图标 */
+export function IconGitBranch(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="4.5" cy="3.5" r="1.5" />
+      <circle cx="4.5" cy="12.5" r="1.5" />
+      <circle cx="11.5" cy="6" r="1.5" />
+      <path d="M4.5 5v6" />
+      <path d="M11.5 7.5c0 2.5-2.5 3-7 3" />
+    </Svg>
+  );
+}

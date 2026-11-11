@@ -3,9 +3,11 @@
 pub mod app;
 pub mod discovery;
 pub mod fs;
+pub mod git;
 pub mod lsp;
 pub mod ssh;
 pub mod terminal;
+pub mod updater;
 pub mod workspace;
 pub mod wsl;
 

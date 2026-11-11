@@ -26,7 +26,7 @@ export function Modal({ title, children, onClose, footer, width = 420 }: ModalPr
         ref={ref}
         tabIndex={-1}
         className="rounded-lg border border-zinc-700 bg-zinc-800 shadow-2xl outline-none"
-        style={{ width }}
+        style={{ width, maxWidth: "calc(100vw - 32px)" }}
       >
         <div className="border-b border-zinc-700 px-4 py-3 text-sm font-medium text-zinc-100">
           {title}

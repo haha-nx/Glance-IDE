@@ -451,15 +451,16 @@ pub async fn exec_capture(
     let mut stdout: Vec<u8> = Vec::new();
     let mut stderr: Vec<u8> = Vec::new();
     let mut exit_code: Option<i32> = None;
+    let mut saw_eof = false;
     let deadline = tokio::time::Instant::now() + timeout;
 
     loop {
         if tokio::time::Instant::now() >= deadline {
             break;
         }
-        match tokio::time::timeout(std::time::Duration::from_millis(300), read_half.wait()).await {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), read_half.wait()).await {
             Err(_) => {
-                if exit_code.is_some() {
+                if exit_code.is_some() && saw_eof {
                     break;
                 }
             }
@@ -469,6 +470,7 @@ pub async fn exec_capture(
                 exit_code = Some(exit_status as i32);
             }
             Ok(Some(ChannelMsg::Eof)) => {
+                saw_eof = true;
                 if exit_code.is_some() {
                     break;
                 }
