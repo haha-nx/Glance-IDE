@@ -119,6 +119,17 @@ export function applyDomSettings(settings: AppSettings): void {
   if (typeof document === "undefined") return;
   document.documentElement.setAttribute("data-theme", settings.theme);
   document.documentElement.style.setProperty("--glance-font-size", `${settings.fontSize}px`);
+  // 同步 macOS 原生标题栏外观：红绿灯按钮底色跟随窗口 theme，
+  // 否则深色界面里会留下浅色底块，浅色主题下又反过来。
+  if (typeof navigator !== "undefined" && /Mac OS X|Macintosh/.test(navigator.userAgent)) {
+    void import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) =>
+        getCurrentWindow().setTheme(settings.theme === "light" ? "light" : "dark"),
+      )
+      .catch(() => {
+        /* 非 Tauri 环境或权限缺失时忽略 */
+      });
+  }
 }
 
 function persistSettings(settings: AppSettings, syncDb = true): void {

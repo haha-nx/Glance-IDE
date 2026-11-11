@@ -1,6 +1,6 @@
 //! 数据库打开、迁移与访问封装。
-//! 表结构对应路线图 §9.1 的核心表。fingerprint 全局唯一；
-//! 不以 (host, port) 作为设备身份键（§9.1 底部说明）。
+//! 表结构对应核心数据模型。fingerprint 全局唯一；
+//! 不以 (host, port) 作为设备身份键。
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -10,7 +10,7 @@ use rusqlite::Connection;
 const SCHEMA_VERSION: i32 = 2;
 
 /// 每个版本一条迁移。MIGRATIONS[0] 把 user_version 0 → 1。
-/// v1：核心表（路线图 §9.1）
+/// v1：核心表
 const MIGRATION_V1: &str = r#"
 CREATE TABLE connection_profiles (
     id TEXT PRIMARY KEY,
@@ -118,7 +118,7 @@ CREATE INDEX idx_workspaces_device ON workspaces(device_identity_id);
 CREATE INDEX idx_tasks_device ON task_history(device_identity_id);
 "#;
 
-/// v2：公钥认证所需的私钥文件路径（口令仍存 OS 凭据库，§9.2）
+/// v2：公钥认证所需的私钥文件路径（口令仍存 OS 凭据库）
 const MIGRATION_V2: &str = "ALTER TABLE connection_profiles ADD COLUMN key_path TEXT;";
 
 const MIGRATIONS: &[&str] = &[MIGRATION_V1, MIGRATION_V2];
@@ -129,7 +129,7 @@ pub struct Database {
 }
 
 impl Database {
-    /// 打开（或创建）数据库并执行迁移。迁移前对旧库做一次备份（§9.4）。
+    /// 打开（或创建）数据库并执行迁移。迁移前对旧库做一次备份。
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);

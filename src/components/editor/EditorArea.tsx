@@ -10,6 +10,7 @@ import { MonacoHost } from "./MonacoHost";
 import { GitDiffView } from "./GitDiffView";
 import { MarkdownWysiwyg } from "../markdown/MarkdownWysiwyg";
 import { SettingsModal } from "../common/SettingsModal";
+import { IS_MAC } from "../../lib/platform";
 
 /**
  * 编辑器区（VS Code 风格多分组分屏）：
@@ -291,9 +292,11 @@ function Welcome() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 text-zinc-600">
       <p className="text-4xl font-light tracking-widest text-zinc-700">GLANCE</p>
-      <p className="text-sm">本地 / 远程 / WSL 一体化开发工作台</p>
+      <p className="text-sm">{IS_MAC ? "本地 / 远程一体化开发工作台" : "本地 / 远程 / WSL 一体化开发工作台"}</p>
       <p className="mt-4 text-xs text-zinc-700">
-        文件菜单可打开本地文件夹 · 左侧活动栏可连接 SSH 远程设备或 WSL 子系统
+        {IS_MAC
+          ? "文件菜单可打开本地文件夹 · 左侧活动栏可连接 SSH 远程设备"
+          : "文件菜单可打开本地文件夹 · 左侧活动栏可连接 SSH 远程设备或 WSL 子系统"}
       </p>
     </div>
   );

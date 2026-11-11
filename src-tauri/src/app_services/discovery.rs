@@ -1,6 +1,6 @@
-//! 局域网设备发现（路线图 M5，§08）。
+//! 局域网设备发现。
 //! 双通道：mDNS/DNS-SD + 受控 TCP 端口探测（并发上限、超时、可取消）。
-//! 安全边界（§8.2）：扫描不输密码、不试默认账号、不建立信任；
+//! 安全边界：扫描不输密码、不试默认账号、不建立信任；
 //! 仅 TCP 可达 → 「端口开放，协议未确认」；读到 SSH banner 才标「确认 SSH」。
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-/// 扫描并发上限（§8.3：初始值经实测确定，避免打满网络）
+/// 扫描并发上限（初始值经实测确定，避免打满网络）
 const SCAN_CONCURRENCY: usize = 128;
 /// 单目标 TCP 连接超时
 const TCP_TIMEOUT: Duration = Duration::from_millis(600);

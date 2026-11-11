@@ -21,7 +21,7 @@ export function monacoThemeFor(theme: AppTheme): string {
 }
 
 /**
- * Monaco ESM 离线集成（路线图 §2.4）：
+ * Monaco ESM 离线集成：
  * - Worker 全部经 Vite 打包为本地资源，无 CDN 依赖
  * - 全应用单次初始化
  */

@@ -1,5 +1,5 @@
 //! SSH 连接配置、设备身份登记与连接编排 Commands（M2 任务 2.2/2.5/2.6）。
-//! 安全基线：未知/变化 Host Key 阻断（ADR-007）；密码只进 OS 凭据库（§9.2）。
+//! 安全基线：未知/变化 Host Key 阻断（ADR-007）；密码只进 OS 凭据库。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -129,7 +129,7 @@ pub async fn create_profile(
     validate_profile_input(&name, &host, port, &username, &auth_method, &password, &key_path, &identity_mode)?;
 
     let id = Uuid::new_v4();
-    // 凭据只存 OS 凭据库（§9.2）：密码与私钥口令分别使用独立引用
+    // 凭据只存 OS 凭据库：密码与私钥口令分别使用独立引用
     let credential_ref = match auth_method.as_str() {
         "password" => {
             let r = format!("glance://profile/{id}");
@@ -228,7 +228,7 @@ pub async fn update_profile(
 pub async fn delete_profile(state: State<'_, AppState>, profile_id: String) -> Result<(), CmdError> {
     let id = parse_uuid(&profile_id, "profile_id")?;
     if let Some(cred_ref) = connection_profiles::delete_profile(&state.db, id)? {
-        // 删除 Profile 时清理其独占的系统凭据（§9.4：删除需分别确认，UI 已确认）
+        // 删除 Profile 时清理其独占的系统凭据（删除需分别确认，UI 已确认）
         let _ = state.secrets.delete_secret(&cred_ref);
     }
     Ok(())
@@ -293,8 +293,61 @@ pub async fn unbind_identity(
 
 // ---------- 连接编排 ----------
 
+/// 会话健康监控：设备关机 / 网络中断会让 russh handle 变为 closed。
+/// 每 2 秒探测一次，意外掉线时回收会话并向前端推送 `ssh:session-lost`。
+///
+/// 主动断开（用户点击断开 / 重连替换旧会话）会先把条目从 manager 移除，
+/// 此时 `get` 返回 None，监控静默退出，不会误报。
+fn spawn_session_watchdog(
+    app: tauri::AppHandle,
+    session_id: Uuid,
+    profile_id: Uuid,
+    device_identity_id: Uuid,
+    device_name: Option<String>,
+    endpoint: String,
+) {
+    use tauri::{Emitter, Manager};
+
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+            let entry = {
+                let state = app.state::<AppState>();
+                state.sessions.get(&session_id)
+            };
+            let Some(entry) = entry else {
+                // 会话已被主动移除（用户断开 / 重连替换 / 应用退出）
+                break;
+            };
+
+            if entry.is_alive().await {
+                continue;
+            }
+
+            {
+                let state = app.state::<AppState>();
+                state.sessions.disconnect(&session_id).await;
+            }
+
+            let _ = app.emit(
+                "ssh:session-lost",
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "profileId": profile_id,
+                    "deviceIdentityId": device_identity_id,
+                    "deviceName": device_name,
+                    "endpoint": endpoint,
+                }),
+            );
+            break;
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn connect_profile(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     profile_id: String,
 ) -> Result<ConnectOutcomeDto, CmdError> {
@@ -325,9 +378,18 @@ pub async fn connect_profile(
                 pid,
                 device_identity_id,
                 device_name.clone(),
-                endpoint,
+                endpoint.clone(),
                 chrono::Utc::now().timestamp_millis(),
                 handle,
+            );
+            // 启动掉线监控（设备关机/网络中断时通知前端弹窗）
+            spawn_session_watchdog(
+                app.clone(),
+                session_id,
+                pid,
+                device_identity_id,
+                device_name.clone(),
+                endpoint,
             );
             ConnectOutcomeDto::Connected { session_id, device_identity_id, device_name }
         }
@@ -434,7 +496,7 @@ pub async fn disconnect_session(
     session_id: String,
 ) -> Result<bool, CmdError> {
     let sid = parse_uuid(&session_id, "session_id")?;
-    // 先回收本会话的 LSP 通道（§6.4 生命周期：随会话关闭）
+    // 先回收本会话的 LSP 通道（生命周期：随会话关闭）
     crate::app_services::lsp::close_by_session(&state.lsp, &sid).await;
     Ok(state.sessions.disconnect(&sid).await)
 }

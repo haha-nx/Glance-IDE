@@ -5,18 +5,18 @@ import { sshApi } from "../../services/ssh";
 import { explorerStore } from "../../stores/explorer";
 
 /**
- * 远程 LSP 桥（路线图 M6，§6.2/§6.4/§6.5）。
+ * 远程 LSP 桥。
  *
  * 冻结决策（Spike 结论，详见 docs/Handoff.md）：
  * - 传输：Tauri Channel（Rust 侧 SSH exec 无 PTY + JSON-RPC 组帧）；不引入本地 WebSocket。
  * - 客户端：不引入 monaco-languageclient（其 8.x/9.x 强制绑定 @codingame/monaco-vscode-api
  *   全家桶，会替换 vanilla Monaco，与本项目 EditorHost/Model 架构冲突）；
  *   前端直接消费 JSON-RPC JSON 消息，自建轻量 Monaco 映射（补全/悬停/定义跳转/诊断）。
- * - 缓存键（§6.5）：device_identity_id + workspace_root + language（控制器实例即上下文）。
- * - 同步策略：didChange 全量文本 + 250ms 防抖（first 版本 §5.4 边界内）。
+ * - 缓存键：device_identity_id + workspace_root + language（控制器实例即上下文）。
+ * - 同步策略：didChange 全量文本 + 250ms 防抖（first 版本  边界内）。
  */
 
-/** 语言 → 服务器候选（按序回退，§6.2 首选工具） */
+/** 语言 → 服务器候选（按序回退， 首选工具） */
 const SERVER_SPECS: Record<string, Array<{ server: string; args: string[] }>> = {
   cpp: [{ server: "clangd", args: [] }],
   c: [{ server: "clangd", args: [] }],
@@ -159,7 +159,7 @@ class RemoteLspController {
     }
   }
 
-  /** 服务器启动失败/握手失败：尝试下一候选（§6.6 降级可见） */
+  /** 服务器启动失败/握手失败：尝试下一候选（降级可见） */
   private async failover(reason: string): Promise<void> {
     this.cleanupChannel();
     const specs = SERVER_SPECS[this.languageId] ?? [];
@@ -204,7 +204,7 @@ class RemoteLspController {
     if (method === "textDocument/publishDiagnostics") {
       this.onDiagnostics(msg.params as Json);
     }
-    // window/showMessage 等通知暂不处理（§6.4 首版边界）
+    // window/showMessage 等通知暂不处理（首版边界）
   }
 
   private onDiagnostics(params: Json): void {
@@ -392,7 +392,7 @@ class RemoteLspController {
   private watchChanges(key: string, model: monaco.editor.ITextModel): void {
     if (this.changeDisposals.has(key)) return;
     const disposal = model.onDidChangeContent(() => {
-      // 全量同步 + 防抖（§6.4 首版：语义正确优先于带宽）
+      // 全量同步 + 防抖（首版：语义正确优先于带宽）
       const prev = this.debounceTimers.get(key);
       if (prev) clearTimeout(prev);
       this.debounceTimers.set(
@@ -648,7 +648,7 @@ function normalizeHoverContents(contents: unknown): string | null {
   return null;
 }
 
-// ── 管理器（单例）：键 = device_identity_id + workspace + language（§6.5）──────
+// ── 管理器（单例）：键 = device_identity_id + workspace + language──────
 
 class LspManager {
   private controllers = new Map<string, RemoteLspController>();
@@ -718,7 +718,7 @@ class LspManager {
     const key = this.key(parsed.deviceId, workspaceRoot, languageId);
     let controller = this.controllers.get(key);
     if (!controller) {
-      // 找到该设备的活跃会话（远程操作按 device_identity_id 路由，§9.3）
+      // 找到该设备的活跃会话（远程操作按 device_identity_id 路由）
       let sessionId: string | null = null;
       try {
         const sessions = await sshApi.listSessions();

@@ -43,6 +43,10 @@ mdns-sd = "0.13"
 [profile.dev]
 opt-level = 1
 
+# Unix 本机终端需要真正的 PTY（macOS/Linux）；Windows 走管道 + CREATE_NO_WINDOW
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
 uuid = { version = "1", features = ["v4"] }

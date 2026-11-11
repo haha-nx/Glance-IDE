@@ -1,11 +1,12 @@
 import { gitStore } from "../../stores/git";
 import { IconFiles, IconSearch, IconGitBranch, IconRemote, IconRadar } from "./icons";
+import { IS_MAC } from "../../lib/platform";
 
 const items = [
   { id: "explorer", label: "资源管理器", Icon: IconFiles },
   { id: "search", label: "搜索", Icon: IconSearch },
   { id: "git", label: "源代码管理", Icon: IconGitBranch },
-  { id: "remote", label: "远程连接与 WSL", Icon: IconRemote },
+  { id: "remote", label: IS_MAC ? "远程连接" : "远程连接与 WSL", Icon: IconRemote },
   { id: "discovery", label: "局域网发现", Icon: IconRadar },
 ] as const;
 
@@ -30,6 +31,7 @@ export function ActivityBar({ active, onActivate }: ActivityBarProps) {
           <button
             key={id}
             title={badgeCount > 0 ? `${label} (${badgeCount} 个挂起的更改)` : label}
+            data-tooltip-side="right"
             onClick={() => onActivate(id)}
             className={`relative flex h-10 w-10 items-center justify-center rounded-md transition-colors ${
               isSelected

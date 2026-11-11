@@ -2,10 +2,11 @@ import { create } from "zustand";
 import type { FileEntryDto } from "../types/ipc";
 import { filesApi } from "../services/files";
 import { workspaceApi } from "../services/workspace";
+import { isBlankWindow } from "../lib/windowState";
 
 /**
  * 文件树状态：childrenMap 缓存目录列表，按需懒加载。
- * rootPath 持久化到 localStorage（非敏感，路线图 §9.1 ui_state）。
+ * rootPath 持久化到 localStorage（非敏感 ui_state）。
  */
 
 const ROOT_KEY = "glance.recentRoot";
@@ -41,7 +42,8 @@ interface ExplorerState {
 }
 
 export const explorerStore = create<ExplorerState>()((set, get) => ({
-  rootPath: localStorage.getItem(ROOT_KEY),
+  // 空白窗口不继承主窗口的工作区根目录
+  rootPath: isBlankWindow() ? null : localStorage.getItem(ROOT_KEY),
   rootError: null,
   childrenMap: {},
   expanded: {},

@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { open as pickDialog } from "@tauri-apps/plugin-dialog";
 import { appApi, filesApi } from "../../services/files";
+import { updaterApi } from "../../services/updater";
 import { explorerStore } from "../../stores/explorer";
 import { tabsStore } from "../../stores/tabs";
 import { getOrCreateModel } from "../../lib/models";
+import { IS_MAC } from "../../lib/platform";
+
+/** 快捷键文案：macOS 用 ⌘，Windows 用 Ctrl */
+const mod = IS_MAC ? "⌘" : "Ctrl+";
+const shift = IS_MAC ? "⇧" : "Shift+";
+const altKey = IS_MAC ? "⌥" : "Alt+";
 
 interface MenuItem {
   label: string;
@@ -79,6 +87,68 @@ export function TitleBar({
     window.addEventListener("mousedown", handleOutsideClick);
     return () => window.removeEventListener("mousedown", handleOutsideClick);
   }, [activeMenu]);
+
+  // macOS 原生菜单栏事件：系统菜单项统一以 menu:command 派发，在此映射到既有动作
+  // 用 ref 持有最新回调，避免父组件每次渲染都重新订阅
+  const toggleTerminalRef = useRef(onToggleTerminal);
+  toggleTerminalRef.current = onToggleTerminal;
+  const newTerminalRef = useRef(onNewTerminal);
+  newTerminalRef.current = onNewTerminal;
+
+  useEffect(() => {
+    if (!IS_MAC) return;
+    let unlisten: (() => void) | null = null;
+    void listen<string>("menu:command", (event) => {
+      switch (event.payload) {
+        case "new_file":
+          newFile();
+          break;
+        case "new_folder":
+          newFolder();
+          break;
+        case "new_window":
+          newWindow();
+          break;
+        case "save":
+          saveCurrent();
+          break;
+        case "save_all":
+          saveAll();
+          break;
+        case "new_terminal":
+          newTerminalRef.current?.();
+          break;
+        case "toggle_terminal":
+          toggleTerminalRef.current?.();
+          break;
+        case "panel_explorer":
+        case "panel_search":
+        case "panel_git":
+        case "panel_remote":
+        case "panel_discovery": {
+          const panel = event.payload.replace("panel_", "");
+          window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: panel }));
+          break;
+        }
+        case "github_repo":
+          void updaterApi.openExternalUrl("https://github.com/haha-nx/Glance-IDE");
+          break;
+        case "quit":
+          // 复用未保存确认流程：有脏文件时由 App 弹出确认，否则直接退出
+          if (tabsStore.getState().hasDirty()) {
+            window.dispatchEvent(new CustomEvent("glance:request-close"));
+          } else {
+            void appApi.exitApp();
+          }
+          break;
+        default:
+          break;
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
 
   // 窗口控制逻辑
   const handleMinimize = async () => {
@@ -198,37 +268,37 @@ export function TitleBar({
   const menus: MenuDef[] = [
     {
       id: "file",
-      label: "文件(F)",
+      label: `文件${IS_MAC ? "" : "(F)"}`,
       items: [
-        { label: "新建文件", shortcut: "Ctrl+N", action: newFile },
+        { label: "新建文件", shortcut: `${mod}N`, action: newFile },
         { label: "新建文件夹", action: newFolder },
-        { label: "新建窗口", shortcut: "Ctrl+Shift+N", action: newWindow },
+        { label: "新建窗口", shortcut: `${mod}${shift}N`, action: newWindow },
         { separator: true, label: "" },
-        { label: "打开文件夹", shortcut: "Ctrl+K Ctrl+O", action: () => void openFolder() },
-        { label: "打开文件", shortcut: "Ctrl+O", action: () => void openFile() },
+        { label: "打开文件夹", shortcut: `${mod}${shift}O`, action: () => void openFolder() },
+        { label: "打开文件", shortcut: `${mod}O`, action: () => void openFile() },
         { separator: true, label: "" },
-        { label: "保存", shortcut: "Ctrl+S", action: saveCurrent },
-        { label: "全部保存", shortcut: "Ctrl+Shift+S", action: saveAll },
+        { label: "保存", shortcut: `${mod}S`, action: saveCurrent },
+        { label: "全部保存", shortcut: `${mod}${altKey}S`, action: saveAll },
         { separator: true, label: "" },
         {
           label: "设置",
-          shortcut: "Ctrl+,",
+          shortcut: `${mod},`,
           action: () => {
             setActiveMenu(null);
             onOpenSettings?.();
           },
         },
         { separator: true, label: "" },
-        { label: "退出", shortcut: "Alt+F4", action: handleClose },
+        { label: "退出", shortcut: IS_MAC ? `${mod}Q` : "Alt+F4", action: handleClose },
       ],
     },
     {
       id: "edit",
-      label: "编辑(E)",
+      label: `编辑${IS_MAC ? "" : "(E)"}`,
       items: [
         {
           label: "撤销",
-          shortcut: "Ctrl+Z",
+          shortcut: `${mod}Z`,
           action: () => {
             setActiveMenu(null);
             document.execCommand("undo");
@@ -236,7 +306,7 @@ export function TitleBar({
         },
         {
           label: "重做",
-          shortcut: "Ctrl+Y",
+          shortcut: IS_MAC ? `${mod}${shift}Z` : "Ctrl+Y",
           action: () => {
             setActiveMenu(null);
             document.execCommand("redo");
@@ -245,7 +315,7 @@ export function TitleBar({
         { separator: true, label: "" },
         {
           label: "剪切",
-          shortcut: "Ctrl+X",
+          shortcut: `${mod}X`,
           action: () => {
             setActiveMenu(null);
             document.execCommand("cut");
@@ -253,7 +323,7 @@ export function TitleBar({
         },
         {
           label: "复制",
-          shortcut: "Ctrl+C",
+          shortcut: `${mod}C`,
           action: () => {
             setActiveMenu(null);
             document.execCommand("copy");
@@ -261,7 +331,7 @@ export function TitleBar({
         },
         {
           label: "粘贴",
-          shortcut: "Ctrl+V",
+          shortcut: `${mod}V`,
           action: () => {
             setActiveMenu(null);
             document.execCommand("paste");
@@ -270,7 +340,7 @@ export function TitleBar({
         { separator: true, label: "" },
         {
           label: "全选",
-          shortcut: "Ctrl+A",
+          shortcut: `${mod}A`,
           action: () => {
             setActiveMenu(null);
             document.execCommand("selectAll");
@@ -280,11 +350,11 @@ export function TitleBar({
     },
     {
       id: "view",
-      label: "查看(V)",
+      label: `查看${IS_MAC ? "" : "(V)"}`,
       items: [
         {
           label: "资源管理器",
-          shortcut: "Ctrl+Shift+E",
+          shortcut: `${mod}${shift}E`,
           action: () => {
             setActiveMenu(null);
             window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: "explorer" }));
@@ -292,7 +362,7 @@ export function TitleBar({
         },
         {
           label: "全局搜索",
-          shortcut: "Ctrl+Shift+F",
+          shortcut: `${mod}${shift}F`,
           action: () => {
             setActiveMenu(null);
             window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: "search" }));
@@ -300,15 +370,15 @@ export function TitleBar({
         },
         {
           label: "源代码管理",
-          shortcut: "Ctrl+Shift+G",
+          shortcut: `${mod}${shift}G`,
           action: () => {
             setActiveMenu(null);
             window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: "git" }));
           },
         },
         {
-          label: "远程连接与 WSL",
-          shortcut: "Ctrl+Shift+R",
+          label: IS_MAC ? "远程连接" : "远程连接与 WSL",
+          shortcut: `${mod}${shift}R`,
           action: () => {
             setActiveMenu(null);
             window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: "remote" }));
@@ -324,7 +394,7 @@ export function TitleBar({
         { separator: true, label: "" },
         {
           label: "切换底部终端",
-          shortcut: "Ctrl+`",
+          shortcut: `${mod}\``,
           action: () => {
             setActiveMenu(null);
             onToggleTerminal?.();
@@ -333,7 +403,7 @@ export function TitleBar({
         { separator: true, label: "" },
         {
           label: "切换全屏",
-          shortcut: "F11",
+          shortcut: IS_MAC ? "⌃⌘F" : "F11",
           action: () => {
             setActiveMenu(null);
             void handleToggleMaximize();
@@ -355,30 +425,50 @@ export function TitleBar({
   return (
     <div
       ref={barRef}
-      className="flex h-[30px] shrink-0 select-none items-center justify-between border-b border-zinc-800 bg-[var(--glance-bg)] text-[12px] text-zinc-300"
+      data-tauri-drag-region
+      className={`flex h-[30px] shrink-0 select-none items-center justify-between border-b border-zinc-800 bg-[var(--glance-bg)] text-[12px] text-zinc-300 ${
+        // macOS 标题栏叠加在内容之上，左侧需给原生红绿灯让出位置
+        IS_MAC ? "pl-[76px]" : ""
+      }`}
     >
-      {/* 左侧：Glance IDE 原始 Logo + 经典单行菜单项 */}
+      {/* 左侧：Windows 品牌 Logo + 单行菜单项；macOS 不需要（菜单与红绿灯都由系统提供） */}
       <div className="flex h-full items-center">
-        {/* Glance IDE 标志：天蓝色多边形/折线 Logo */}
-        <div className="flex h-full items-center pl-2.5 pr-2" title="Glance IDE">
+        {/* Glance IDE 标志：与应用图标一致 —— 天蓝色终端提示符 ">" + 灰色下划线（仅 Windows 显示） */}
+        <div
+          className={`flex h-full items-center pl-2.5 pr-2 ${IS_MAC ? "hidden" : ""}`}
+          title="Glance IDE"
+        >
+          {/* 图形实际包围盒：x 272..768 / y 292..732（含 56 像素圆头笔画） */}
           <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#38bdf8"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+            width="18"
+            height="16"
+            viewBox="272 292 496 440"
+            aria-hidden="true"
           >
-            <polygon points="12 2 2 7 12 12 22 7 12 2" />
-            <polyline points="2 17 12 22 22 17" />
-            <polyline points="2 12 12 17 22 12" />
+            {/* 提示符 ">"：与 scripts/gen_icon.py 的 (300,320)→(520,512)→(300,704) 折线同源 */}
+            <path
+              d="M300 320 L520 512 L300 704"
+              fill="none"
+              stroke="#38bdf8"
+              strokeWidth="56"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            {/* 下划线：(580,704)→(740,704)，图标中为 zinc-400 */}
+            <line
+              x1="580"
+              y1="704"
+              x2="740"
+              y2="704"
+              stroke="#a3a3b1"
+              strokeWidth="56"
+              strokeLinecap="round"
+            />
           </svg>
         </div>
 
-        {/* 顶部菜单：文件(F) 编辑(E) 查看(V) 终端(直接新建) */}
-        <div className="flex h-full items-center text-zinc-300">
+        {/* 顶部菜单：文件(F) 编辑(E) 查看(V) 终端(直接新建)；macOS 隐藏（由系统菜单栏承担） */}
+        <div className={`flex h-full items-center text-zinc-300 ${IS_MAC ? "hidden" : ""}`}>
           {menus.map((menu) => {
             const isOpen = activeMenu === menu.id;
             return (
@@ -438,10 +528,11 @@ export function TitleBar({
         </div>
       </div>
 
-      {/* 中间：窗口标题 + 拖拽区域 */}
+      {/* 中间：窗口标题 + 拖拽区域。
+          双击最大化/还原由 Tauri 内置 drag.js 对 data-tauri-drag-region 原生处理，
+          这里不能再绑 onDoubleClick，否则会与原生行为各切一次、放大后立刻缩回。 */}
       <div
         data-tauri-drag-region
-        onDoubleClick={handleToggleMaximize}
         className="flex h-full flex-1 items-center justify-center cursor-default px-4 text-zinc-400 text-[12px] font-normal truncate"
       >
         <span data-tauri-drag-region className="truncate opacity-90">
@@ -449,8 +540,8 @@ export function TitleBar({
         </span>
       </div>
 
-      {/* 右侧：Windows 经典窗口控制按钮（最小化、最大化/还原、关闭） */}
-      <div className="flex h-full items-center">
+      {/* 右侧：Windows 窗口控制按钮（macOS 使用系统原生红绿灯，不渲染） */}
+      <div className={`flex h-full items-center ${IS_MAC ? "hidden" : ""}`}>
         <button
           onClick={handleMinimize}
           className="flex h-full w-11 items-center justify-center text-zinc-300 hover:bg-zinc-800/70 hover:text-zinc-100 transition-colors"

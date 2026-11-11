@@ -1,7 +1,7 @@
-//! 远程语言智能（路线图 M6，§06）。
-//! - 语言服务器检测：可执行路径 / 版本 / 架构（§6.6：不静默安装，缺失则降级提示）
-//! - 工程识别：ROS 2 / CMake / Python 工作区与 compile_commands.json 指纹（§6.3/§6.5）
-//! - LSP 传输桥（§6.4 Spike 冻结方案）：SSH exec（无 PTY）字节透传 +
+//! 远程语言智能。
+//! - 语言服务器检测：可执行路径 / 版本 / 架构（不静默安装，缺失则降级提示）
+//! - 工程识别：ROS 2 / CMake / Python 工作区与 compile_commands.json 指纹
+//! - LSP 传输桥（Spike 冻结方案）：SSH exec（无 PTY）字节透传 +
 //!   Rust 侧 JSON-RPC Content-Length 组帧/解帧；前端经 Tauri Channel 收发 JSON 消息。
 //!   决策记录见 docs/Handoff.md「M6 LSP Spike 结论」。
 
@@ -38,7 +38,7 @@ fn first_meaningful_line(text: &str) -> Option<String> {
         .map(|l| l.chars().take(120).collect())
 }
 
-/// 检测目标设备上预装的语言服务器（§6.6：不得联网下载）
+/// 检测目标设备上预装的语言服务器（不得联网下载）
 pub async fn detect_servers(
     sessions: &SessionManager,
     session_id: Uuid,
@@ -93,13 +93,13 @@ pub struct ProjectInfo {
     pub workspace_root: String,
     pub kind: String, // ros2 | cmake | python | unknown
     pub details: Vec<String>,
-    /// compile_commands.json 是否存在（clangd 必需，§6.3）
+    /// compile_commands.json 是否存在（clangd 必需）
     pub has_compile_commands: bool,
-    /// compile_commands.json 摘要指纹（sha256 前 16 位；缓存键组成部分 §6.5）
+    /// compile_commands.json 摘要指纹（sha256 前 16 位；缓存键组成部分 ）
     pub compile_db_fingerprint: Option<String>,
 }
 
-/// 识别远程工程结构（只读探测，不执行构建脚本 §3.2 Project Service 边界）
+/// 识别远程工程结构（只读探测，不执行构建脚本  Project Service 边界）
 pub async fn detect_project(
     sessions: &SessionManager,
     session_id: Uuid,
@@ -155,7 +155,7 @@ pub async fn detect_project(
         details.push("远程探测未完成（会话异常？）".into());
     }
 
-    // compile_commands 指纹（§6.5 缓存键：device+workspace+clangd_version+compile_db_hash）
+    // compile_commands 指纹（缓存键：device+workspace+clangd_version+compile_db_hash）
     let compile_db_fingerprint = if let Some(path) = compile_db_path {
         let (hash, _, hcode) = exec_capture(
             sessions,
@@ -180,9 +180,9 @@ pub async fn detect_project(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LSP 传输桥（§6.4）：SSH exec（无 PTY）↔ JSON-RPC Content-Length 组帧 ↔ 前端 Channel
+// LSP 传输桥：SSH exec（无 PTY）↔ JSON-RPC Content-Length 组帧 ↔ 前端 Channel
 //
-// 安全（§6.4 硬性要求）：
+// 安全（硬性要求）：
 // - 不监听任何本机端口（Tauri Channel 方案的天然优势，无攻击面）
 // - 远程命令参数分离构造 + 白名单字符校验；工作区路径安全转义，绝不拼接进 shell
 // - 通道生命周期与会话绑定：会话断开 / 应用退出即关闭
@@ -356,9 +356,9 @@ pub(crate) enum LspCommand {
 struct LspChannelEntry {
     lsp_id: Uuid,
     session_id: Uuid,
-    /// 所属设备身份（§6.5：LSP 上下文按设备隔离，不以 IP 为键）
+    /// 所属设备身份（LSP 上下文按设备隔离，不以 IP 为键）
     pub device_identity_id: Uuid,
-    /// 工作区/语言/服务器（§6.5 缓存键，诊断与展示用）
+    /// 工作区/语言/服务器（缓存键，诊断与展示用）
     #[allow(dead_code)]
     pub workspace_root: String,
     #[allow(dead_code)]
@@ -417,7 +417,7 @@ impl LspRegistry {
     }
 }
 
-/// 打开远程语言服务器（exec 无 PTY，§4.8 PTY/exec 严格分离）。
+/// 打开远程语言服务器（exec 无 PTY，PTY 与 exec 严格分离）。
 /// stdout=JSON-RPC 帧；stderr=服务器日志（推给前端展示，不污染协议流）。
 #[allow(clippy::too_many_arguments)]
 pub async fn open_lsp(

@@ -9,7 +9,7 @@ export interface Problem {
   col: number;
   severity: "error" | "warning" | "note";
   message: string;
-  /** 原始行（保留现场，路径无法解析时不丢日志 §7.4） */
+  /** 原始行（保留现场，路径无法解析时不丢日志 ） */
   raw: string;
 }
 

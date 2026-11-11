@@ -1,4 +1,4 @@
-//! 运行时 SSH 会话管理（路线图 §11.4）：
+//! 运行时 SSH 会话管理：
 //! 每个会话绑定 profile_id + device_identity_id + endpoint + session_id。
 //! 权威连接状态在 Rust 侧；前端仅持有会话列表视图。
 //!
@@ -23,7 +23,7 @@ pub struct SessionEntry {
     pub endpoint: String,
     pub connected_at: i64,
     pub(crate) handle: AsyncMutex<SshHandle<ClientHandler>>,
-    /// 懒初始化的 SFTP Provider（一个会话一个 SFTP Channel，§4.8）
+    /// 懒初始化的 SFTP Provider（一个会话一个 SFTP Channel）
     sftp: AsyncMutex<Option<Arc<SftpFileSystem>>>,
 }
 
@@ -112,7 +112,7 @@ impl SessionManager {
         dead
     }
 
-    /// 按设备身份查找活跃会话（远程文件操作以 device_identity_id 路由，§9.3）。
+    /// 按设备身份查找活跃会话（远程文件操作以 device_identity_id 路由）。
     /// 先清理僵尸会话，再取**最新**一条——同设备多会话时 HashMap 遍历序随机，
     /// 旧死会话可能被选中导致文件操作全部失败。
     pub async fn find_by_device(&self, device_identity_id: &Uuid) -> Option<Arc<SessionEntry>> {

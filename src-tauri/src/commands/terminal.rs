@@ -101,7 +101,7 @@ pub struct TaskResult {
     pub duration_ms: i64,
 }
 
-/// 运行远程构建任务（无 PTY），记录 task_history（§9.1）。
+/// 运行远程构建任务（无 PTY），记录 task_history。
 pub async fn run_task_impl(
     state: &State<'_, AppState>,
     session_id: String,

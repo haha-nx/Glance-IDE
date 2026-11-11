@@ -136,7 +136,7 @@ export function ExplorerPanel() {
           <button
             title="关闭文件夹"
             onClick={closeRoot}
-            className="text-zinc-500 hover:text-zinc-300"
+            className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
           >
             <IconClose size={14} />
           </button>

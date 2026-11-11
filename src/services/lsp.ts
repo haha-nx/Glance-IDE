@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { wrapCmdError } from "../types/ssh";
 
-/** Rust 端 lsp.rs 推送的事件（§6.4 传输桥） */
+/** Rust 端 lsp.rs 推送的事件（传输桥） */
 export type LspEvent =
   | { type: "message"; message: unknown }
   | { type: "stderr"; text: string }

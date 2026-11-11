@@ -6,7 +6,7 @@ import { getOrCreateModel, setModelValueQuiet, disposeModel, getModel, toModelUr
 
 /**
  * 编辑器标签页状态（仅界面状态；权威文件状态在 Rust 端）。
- * 保存流程遵循路线图 §5.4：保存前带 expectedMtimeMs 做冲突检测，冲突不静默覆盖。
+ * 保存流程遵循：保存前带 expectedMtimeMs 做冲突检测，冲突不静默覆盖。
  *
  * 分屏模型（参考 VS Code）：
  * - `tabs` 是全局已打开文档（每个 URI 唯一，对应一个 Monaco Model）；

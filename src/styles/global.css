@@ -274,3 +274,21 @@ body,
 .markdown-body input[type="checkbox"] {
   margin-right: 0.4em;
 }
+
+/* 全局说明气泡：替代原生 title（原生延迟由系统控制，通常 1–2 秒） */
+.glance-tooltip {
+  position: fixed;
+  z-index: 100000;
+  max-width: 320px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--glance-border);
+  background: var(--glance-bg-elevated);
+  color: var(--glance-text);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { TitleBar } from "./components/common/TitleBar";
+import { TooltipLayer } from "./components/common/TooltipLayer";
 import { ActivityBar } from "./components/common/ActivityBar";
 import { StatusBar } from "./components/common/StatusBar";
 import { ExplorerPanel } from "./components/explorer/ExplorerPanel";
@@ -28,10 +30,11 @@ import { workspaceApi } from "./services/workspace";
 import { appApi } from "./services/files";
 import { sshApi } from "./services/ssh";
 import { CmdError, type ConnectionProfileDto } from "./types/ssh";
+import { isBlankWindow } from "./lib/windowState";
 import { Button, Modal, PrimaryButton } from "./components/common/Modal";
 import { IconWarning } from "./components/common/icons";
 
-/** 窗口关闭时若有未保存更改，先确认（路线图 §12.4「未保存提示」） */
+/** 窗口关闭时若有未保存更改，先确认（未保存提示） */
 function useCloseGuard(onBlocked: () => void): void {
   useEffect(() => {
     const win = getCurrentWindow();
@@ -236,7 +239,9 @@ function useWorkspacePersistence({
   }, []);
 
   // 标签持久化（防抖 800ms）
+  // 空白窗口不写入，避免覆盖主窗口的工作区状态
   useEffect(() => {
+    if (isBlankWindow()) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = tabsStore.subscribe((s) => {
       if (timer) clearTimeout(timer);
@@ -253,8 +258,9 @@ function useWorkspacePersistence({
     };
   }, []);
 
-  // 根目录持久化
+  // 根目录持久化（空白窗口不写入）
   useEffect(() => {
+    if (isBlankWindow()) return;
     const unsub = explorerStore.subscribe((s) => {
       if (s.rootPath) {
         void workspaceApi.setUiState("workspace.root", s.rootPath).catch(() => {});
@@ -277,6 +283,14 @@ export function App() {
   const [sshReconnectFail, setSshReconnectFail] = useState<{
     profile: ConnectionProfileDto;
     reason: string;
+  } | null>(null);
+  /** 运行中的 SSH 会话意外掉线（设备关机 / 网络中断） */
+  const [sshLost, setSshLost] = useState<{
+    sessionId: string;
+    profileId: string;
+    deviceIdentityId: string;
+    deviceName: string | null;
+    endpoint: string;
   } | null>(null);
 
   const sidebarWidth = settingsStore((s) => s.sidebarWidth);
@@ -304,6 +318,31 @@ export function App() {
 
   useCloseGuard(() => setPendingWindowClose(true));
   useGlobalSave();
+
+  // SSH 会话意外掉线（设备关机 / 断网）：弹窗让用户选择重连或断开
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void listen<{
+      sessionId: string;
+      profileId: string;
+      deviceIdentityId: string;
+      deviceName: string | null;
+      endpoint: string;
+    }>("ssh:session-lost", (event) => {
+      setSshLost(event.payload);
+      // 同步清掉远程目录缓存，避免继续展示已失效的目录
+      explorerStore.getState().invalidateRemote();
+      // 通知终端面板回收该会话的 SSH 终端标签、远程 LSP 复位
+      window.dispatchEvent(
+        new CustomEvent("glance:session-disconnected", {
+          detail: { deviceIdentityId: event.payload.deviceIdentityId },
+        }),
+      );
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
 
   // 初始化设置，并在「自动检测更新」明确开启时后台检测 GitHub 版本更新（默认关闭时不主动检查或推送）
   useEffect(() => {
@@ -443,8 +482,9 @@ export function App() {
     window.addEventListener("mouseup", onUp);
   }, []);
 
-  // 持久化活动侧边栏面板
+  // 持久化活动侧边栏面板（空白窗口不写入，避免覆盖主窗口状态）
   useEffect(() => {
+    if (isBlankWindow()) return;
     void workspaceApi.setUiState("workspace.activePanel", activePanel).catch(() => {});
     localStorage.setItem("glance.activePanel", activePanel);
   }, [activePanel]);
@@ -556,6 +596,42 @@ export function App() {
     }
   };
 
+  /** SSH 意外掉线后点击「重新连接」：按 id 取真实配置，成功后恢复远程工作区 */
+  const handleReconnectLostSession = async (lost: {
+    profileId: string;
+    deviceName: string | null;
+    endpoint: string;
+  }) => {
+    const fallbackProfile: ConnectionProfileDto = {
+      id: lost.profileId,
+      name: lost.deviceName ?? lost.endpoint,
+      host: lost.endpoint.split(":")[0] ?? lost.endpoint,
+      port: Number(lost.endpoint.split(":")[1] ?? 22),
+      username: "",
+      authMethod: "password",
+      identityMode: "single",
+      keyPath: null,
+      identities: [],
+    };
+    try {
+      const profiles = await sshApi.listProfiles();
+      const profile = profiles.find((p) => p.id === lost.profileId);
+      if (!profile) {
+        setSshReconnectFail({
+          profile: fallbackProfile,
+          reason: "连接配置已被删除，请重新创建连接。",
+        });
+        return;
+      }
+      await handleRetrySsh(profile);
+    } catch (err) {
+      setSshReconnectFail({
+        profile: fallbackProfile,
+        reason: err instanceof CmdError ? err.message : String(err),
+      });
+    }
+  };
+
   const showSidebar =
     activePanel === "explorer" ||
     activePanel === "search" ||
@@ -567,6 +643,7 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col bg-[var(--glance-bg)] overflow-hidden select-none">
+      <TooltipLayer />
       {/* 顶部单行自定义标题导航栏 */}
       <TitleBar
         onToggleTerminal={() => setBottomPanelOpen((v) => !v)}
@@ -820,6 +897,62 @@ export function App() {
           </div>
         </Modal>
       )}
+      {/* 运行中的 SSH 会话意外掉线（设备关机 / 断网） */}
+      {sshLost && (
+        <Modal
+          title="远程设备连接已断开"
+          onClose={() => setSshLost(null)}
+          footer={
+            <div className="flex w-full items-center justify-between">
+              <Button
+                onClick={() => {
+                  const lost = sshLost;
+                  setSshLost(null);
+                  void explorerStore.getState().closeRoot();
+                  setActivePanel("explorer");
+                  window.dispatchEvent(
+                    new CustomEvent("glance:session-disconnected", {
+                      detail: { deviceIdentityId: lost.deviceIdentityId },
+                    }),
+                  );
+                }}
+              >
+                断开连接
+              </Button>
+              <PrimaryButton
+                onClick={() => {
+                  const lost = sshLost;
+                  setSshLost(null);
+                  void handleReconnectLostSession(lost);
+                }}
+              >
+                重新连接
+              </PrimaryButton>
+            </div>
+          }
+        >
+          <div className="space-y-3 text-sm">
+            <div className="flex items-center gap-2 text-amber-400">
+              <IconWarning size={18} />
+              <span className="font-medium text-zinc-100">
+                与远程设备的连接已中断
+              </span>
+            </div>
+            <p className="text-xs text-zinc-300">
+              连接
+              <span className="mx-1 font-mono text-sky-400">
+                {sshLost.deviceName || sshLost.endpoint}
+                {sshLost.deviceName ? ` (${sshLost.endpoint})` : ""}
+              </span>
+              已断开，可能是设备关机、休眠或网络中断。远程文件操作与终端将不可用。
+            </p>
+            <p className="text-[11px] text-zinc-500">
+              选择「重新连接」重建会话并恢复远程工作区，或「断开连接」切回本地工作区。
+            </p>
+          </div>
+        </Modal>
+      )}
+
     </div>
   );
 }

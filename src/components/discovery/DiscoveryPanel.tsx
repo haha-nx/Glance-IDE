@@ -3,7 +3,10 @@ import {
   discoveryApi,
   type DiscoveryCandidate,
 } from "../../services/discovery";
-import { IconPlug, IconRefresh } from "../common/icons";
+import { setPendingPrefill, setPendingProfileConnect } from "../../lib/windowState";
+import { sshApi } from "../../services/ssh";
+import type { ConnectionProfileDto } from "../../types/ssh";
+import { IconRefresh } from "../common/icons";
 
 /**
  * 局域网发现面板（M5）：
@@ -21,7 +24,14 @@ export function DiscoveryPanel() {
   const [searched, setSearched] = useState(false);
   const [candidates, setCandidates] = useState<DiscoveryCandidate[]>([]);
   const [status, setStatus] = useState<string>("");
+  const [savedProfiles, setSavedProfiles] = useState<ConnectionProfileDto[]>([]);
   const scanAbort = useRef(false);
+  /** 本次扫描是否由本组件发起（用于区分卸载清理与 StrictMode 重挂载的取消竞态） */
+  const scanningRef = useRef(false);
+  const ipReadyRef = useRef(false);
+  /** 探测到的真实网段；用户手动改过输入框后不再覆盖 */
+  const detectedCidrRef = useRef<string | null>(null);
+  const editedRef = useRef(false);
 
   // 自动检测本机实际正在使用的物理 LAN IP 并填入前三段（排查过滤代理、VPN、虚拟机网卡）
   const loadLocalIp = async () => {
@@ -44,18 +54,31 @@ export function DiscoveryPanel() {
           setOctet1(parts[0]);
           setOctet2(parts[1]);
           setOctet3(parts[2]);
+          detectedCidrRef.current = `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
         }
       }
     } catch (err) {
       console.warn("读取本机 IP 失败:", err);
+    } finally {
+      ipReadyRef.current = true;
     }
   };
 
   useEffect(() => {
     void loadLocalIp();
+    void sshApi
+      .listProfiles()
+      .then(setSavedProfiles)
+      .catch(() => setSavedProfiles([]));
+
     return () => {
-      scanAbort.current = true;
-      void discoveryApi.cancel().catch(() => {});
+      // 只有本实例真正发起过扫描时才取消。
+      // StrictMode 开发期会「挂载→清理→再挂载」，无条件取消会在用户首次点击
+      // 开始扫描的瞬间把这次扫描取消掉（表现为第一次搜索永远没有结果）。
+      if (scanningRef.current) {
+        scanAbort.current = true;
+        void discoveryApi.cancel().catch(() => {});
+      }
     };
   }, []);
 
@@ -86,18 +109,46 @@ export function DiscoveryPanel() {
     if (scanning) return;
     const targetPort = Number(port.trim()) || 22;
 
+    // 等本机网段探测落定，避免第一次点击用默认 192.168.1 扫错网段
+    const deadline = Date.now() + 1500;
+    while (!ipReadyRef.current && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // 用户没手动改过网段时，优先使用探测到的真实网段
+    const cidr =
+      !editedRef.current && detectedCidrRef.current
+        ? detectedCidrRef.current
+        : selectedCidr;
+
     setScanning(true);
+    scanningRef.current = true;
     setSearched(true);
     scanAbort.current = false;
     setCandidates([]);
-    setStatus(`正在扫描 ${selectedCidr}（端口 ${targetPort}）…`);
+    setStatus(`正在扫描 ${cidr}（端口 ${targetPort}）…`);
+
+    let found = 0;
+    const runOnce = async () => {
+      await discoveryApi.scan(cidr, [targetPort], (c) => {
+        // 只统计最终会展示在列表里的 SSH 候选；端口开放但非 SSH 的不算命中
+        if (c.kind === "ssh") found += 1;
+        addCandidate(c);
+      });
+    };
 
     try {
-      await discoveryApi.scan(selectedCidr, [targetPort], addCandidate);
+      await runOnce();
+      // macOS 首次访问局域网可能被系统权限静默拦截，通常一次重试即可恢复
+      if (!scanAbort.current && found === 0) {
+        setStatus("首次扫描未发现设备，正在重试…");
+        await new Promise((r) => setTimeout(r, 800));
+        if (!scanAbort.current) await runOnce();
+      }
       setStatus(scanAbort.current ? "已取消" : "扫描完成");
     } catch (err) {
       setStatus(`扫描失败：${String(err)}`);
     } finally {
+      scanningRef.current = false;
       setScanning(false);
     }
   }
@@ -110,6 +161,20 @@ export function DiscoveryPanel() {
   }
 
   function connectTo(c: DiscoveryCandidate) {
+    // 命中已保存的 IP:端口 → 直接在当前窗口发起连接（RemotePanel 挂载后消费）
+    const saved = savedProfiles.find((p) => p.host === c.ip && p.port === c.port);
+    if (saved) {
+      setPendingProfileConnect(saved.id);
+      window.dispatchEvent(
+        new CustomEvent("glance:activate-panel", { detail: "remote" }),
+      );
+      return;
+    }
+
+    // 未保存 → 打开远程面板并预填「新建连接配置」
+    // 先暂存：RemotePanel 可能在事件派发时尚未挂载（监听器还没注册），
+    // 面板挂载后会主动取用这份预填数据。
+    setPendingPrefill({ host: c.ip, port: c.port });
     window.dispatchEvent(
       new CustomEvent("glance:prefill-profile", {
         detail: { host: c.ip, port: c.port },
@@ -130,7 +195,7 @@ export function DiscoveryPanel() {
         <button
           title="刷新本机网段"
           onClick={() => void loadLocalIp()}
-          className="text-zinc-500 hover:text-zinc-300 transition-colors"
+          className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
         >
           <IconRefresh size={14} />
         </button>
@@ -144,21 +209,21 @@ export function DiscoveryPanel() {
             <input
               type="text"
               value={octet1}
-              onChange={(e) => setOctet1(e.target.value)}
+              onChange={(e) => { editedRef.current = true; setOctet1(e.target.value); }}
               className="w-9 shrink-0 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-center outline-none focus:border-sky-500 text-xs"
             />
             <span className="text-zinc-500 font-bold">.</span>
             <input
               type="text"
               value={octet2}
-              onChange={(e) => setOctet2(e.target.value)}
+              onChange={(e) => { editedRef.current = true; setOctet2(e.target.value); }}
               className="w-9 shrink-0 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-center outline-none focus:border-sky-500 text-xs"
             />
             <span className="text-zinc-500 font-bold">.</span>
             <input
               type="text"
               value={octet3}
-              onChange={(e) => setOctet3(e.target.value)}
+              onChange={(e) => { editedRef.current = true; setOctet3(e.target.value); }}
               className="w-9 shrink-0 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-center outline-none focus:border-sky-500 text-xs"
             />
             <span className="text-zinc-500 font-bold">.</span>
@@ -188,10 +253,9 @@ export function DiscoveryPanel() {
             <button
               onClick={() => void startScan()}
               disabled={scanning}
-              className="flex h-7 items-center justify-center gap-1.5 rounded bg-sky-600 px-3 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50 transition-colors leading-none"
+              className="flex h-7 items-center justify-center rounded bg-sky-600 px-3 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50 transition-colors leading-none"
             >
-              <IconPlug size={12} className="shrink-0" />
-              <span>开始扫描</span>
+              开始扫描
             </button>
           )}
         </div>
@@ -219,7 +283,7 @@ export function DiscoveryPanel() {
               </div>
               <button
                 onClick={() => connectTo(c)}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-sky-400 hover:bg-sky-600 hover:text-white hover:border-sky-600 transition-colors"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-sky-400 hover:bg-sky-500/15 hover:text-sky-300 transition-colors"
                 title="去连接该设备"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">

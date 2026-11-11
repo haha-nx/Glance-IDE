@@ -9,6 +9,7 @@ import {
 } from "../../stores/settings";
 import { updaterStore } from "../../stores/updater";
 import { Button, Modal, PrimaryButton } from "./Modal";
+import { IS_MAC } from "../../lib/platform";
 
 type SettingsSection = "appearance" | "updates" | "about";
 
@@ -477,7 +478,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                   <span className="text-sm font-semibold text-zinc-100">{appInfo.name}</span>
                   <span className="font-mono text-xs text-sky-400">v{appInfo.version}</span>
                 </div>
-                <p className="text-zinc-400">本地 / 远程 SSH / WSL 一体化桌面开发工作台</p>
+                <p className="text-zinc-400">{IS_MAC ? "本地 / 远程 SSH 一体化桌面开发工作台" : "本地 / 远程 SSH / WSL 一体化桌面开发工作台"}</p>
               </div>
 
               <div className="rounded-lg border border-zinc-700 bg-zinc-900 p-4 space-y-2 text-zinc-300">

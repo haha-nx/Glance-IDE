@@ -1,8 +1,8 @@
-//! 终端（PTY）与构建任务（exec）通道层（路线图 M4，§7.1/§7.2）。
-//! - PTY：交互式 shell，独立通道（§4.8：PTY 与 LSP/exec 严格分离）
+//! 终端（PTY）与构建任务（exec）通道层。
+//! - PTY：交互式 shell，独立通道（PTY 与 LSP/exec 严格分离）
 //! - exec：无 PTY 执行构建命令；stdout/stderr 经 ExtendedData 原生分离；
 //!   exit code 经 ChannelMsg::ExitStatus 获得
-//! - 数据经 Tauri Channel 流式推送（§3.4：长输出用 Channel 而非逐条 Event）
+//! - 数据经 Tauri Channel 流式推送（长输出用 Channel 而非逐条 Event）
 //! - 支持远程 SSH PTY、本机终端（PowerShell/Bash）以及 WSL 终端
 
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ struct TerminalEntry {
     commands: mpsc::Sender<TerminalCommand>,
     #[allow(dead_code)]
     session_id: Uuid,
-    /// 关联设备（错误跳转解析远程路径用，§7.4）
+    /// 关联设备（错误跳转解析远程路径用）
     device_identity_id: Uuid,
 }
 
@@ -294,18 +294,198 @@ async fn open_process_terminal(
     })
 }
 
-/// 打开本机终端（Windows: powershell.exe, Unix: bash/sh）
+/// 打开本机终端（Windows: powershell.exe；Unix: 用户默认 shell，经真实 PTY）
 pub async fn open_local_terminal(
     registry: Arc<TerminalRegistry>,
     cwd: Option<&str>,
     output: EventSink,
 ) -> Result<TerminalInfo, String> {
     #[cfg(windows)]
-    let (prog, args) = ("powershell.exe", vec!["-NoLogo"]);
-    #[cfg(not(windows))]
-    let (prog, args) = ("bash", vec![]);
+    {
+        open_process_terminal(registry, "powershell.exe", &["-NoLogo"], cwd, output).await
+    }
+    #[cfg(unix)]
+    {
+        open_unix_pty_terminal(registry, cwd, output).await
+    }
+}
 
-    open_process_terminal(registry, prog, &args, cwd, output).await
+/// Unix 本机终端：用 openpty 启动真正的交互式 shell。
+///
+/// 直接对 bash 使用管道（Stdio::piped）时内核不分配 TTY：shell 退回非交互模式，
+/// 没有提示符、不回显输入、行编辑/颜色/^C 失效，且 `\r` 不会被行规程转成换行导致命令不执行。
+#[cfg(unix)]
+async fn open_unix_pty_terminal(
+    registry: Arc<TerminalRegistry>,
+    cwd: Option<&str>,
+    output: EventSink,
+) -> Result<TerminalInfo, String> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    let mut master: libc::c_int = -1;
+    let mut slave: libc::c_int = -1;
+    // openpty 的初始窗口尺寸交给前端 resize 覆盖
+    let rc = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if rc != 0 {
+        return Err(format!(
+            "创建 PTY 失败: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: openpty 成功返回的两个 fd 由我们独占
+    let master_fd = unsafe { OwnedFd::from_raw_fd(master) };
+    let slave_fd = unsafe { OwnedFd::from_raw_fd(slave) };
+
+    // 子进程的 stdin/stdout/stderr 都接到 slave 端
+    let slave_for_stdin = slave_fd
+        .try_clone()
+        .map_err(|e| format!("复制 PTY 从端 fd 失败: {e}"))?;
+    let slave_for_stdout = slave_fd
+        .try_clone()
+        .map_err(|e| format!("复制 PTY 从端 fd 失败: {e}"))?;
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let mut cmd = tokio::process::Command::new(&shell);
+    cmd.stdin(std::process::Stdio::from(slave_for_stdin))
+        .stdout(std::process::Stdio::from(slave_for_stdout))
+        .stderr(std::process::Stdio::from(slave_fd))
+        .env("TERM", "xterm-256color");
+
+    if let Some(dir) = cwd {
+        if !dir.is_empty() {
+            cmd.current_dir(dir);
+        }
+    }
+
+    // setsid + TIOCSCTTY：让 shell 成为会话首进程并取得控制终端（交互模式的必要条件）
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("启动终端进程失败 ({shell}): {e}"))?;
+
+    // master 端转成 tokio File：读写分两个句柄
+    let master_reader = tokio::fs::File::from_std(unsafe {
+        std::fs::File::from_raw_fd(std::os::fd::IntoRawFd::into_raw_fd(
+            master_fd
+                .try_clone()
+                .map_err(|e| format!("复制 PTY 主端 fd 失败: {e}"))?,
+        ))
+    });
+    let master_writer = tokio::fs::File::from_std(unsafe {
+        std::fs::File::from_raw_fd(std::os::fd::IntoRawFd::into_raw_fd(master_fd))
+    });
+
+    let channel_id = Uuid::new_v4();
+    let (tx, mut rx) = mpsc::channel::<TerminalCommand>(64);
+    registry.insert(
+        channel_id,
+        TerminalEntry {
+            commands: tx,
+            session_id: Uuid::nil(),
+            device_identity_id: Uuid::nil(),
+        },
+    );
+
+    // 读循环：PTY 输出 → 前端 Channel
+    {
+        use tokio::io::AsyncReadExt;
+        let registry = registry.clone();
+        let cid = channel_id;
+        let output = output.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut reader = master_reader;
+            let mut buf = vec![0u8; 4096];
+            loop {
+                match reader.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => send_data(&output, "data", &buf[..n]),
+                    // 子进程退出后读 master 会返回 EIO，视作正常结束
+                    Err(_) => break,
+                }
+            }
+            registry.remove(&cid);
+            output(serde_json::json!({ "type": "closed" }));
+        });
+    }
+
+    // 写循环：键盘输入 / resize / 关闭
+    {
+        use tokio::io::AsyncWriteExt;
+        let registry = registry.clone();
+        let cid = channel_id;
+        let mut child = child;
+        tauri::async_runtime::spawn(async move {
+            let mut writer = master_writer;
+            let mut master_raw = -1i32;
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    TerminalCommand::Write(data) => {
+                        if writer.write_all(&data).await.is_err() {
+                            break;
+                        }
+                        let _ = writer.flush().await;
+                    }
+                    TerminalCommand::Resize { cols, rows } => {
+                        if master_raw < 0 {
+                            master_raw = std::os::fd::AsRawFd::as_raw_fd(&writer);
+                        }
+                        resize_pty_fd(master_raw, cols, rows);
+                    }
+                    TerminalCommand::Close => {
+                        // 先给 shell 一个退出机会，再兜底 kill
+                        let _ = writer.write_all(b"exit\n").await;
+                        let _ = writer.flush().await;
+                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                        let _ = child.start_kill();
+                        break;
+                    }
+                }
+            }
+            let _ = child.wait().await;
+            registry.remove(&cid);
+        });
+    }
+
+    Ok(TerminalInfo {
+        channel_id,
+        session_id: Uuid::nil(),
+    })
+}
+
+/// 向 PTY master fd 下发窗口尺寸（TIOCSWINSZ）。
+#[cfg(unix)]
+fn resize_pty_fd(fd: i32, cols: u32, rows: u32) {
+    if fd < 0 || cols == 0 || rows == 0 {
+        return;
+    }
+    let ws = libc::winsize {
+        ws_row: rows.min(u16::MAX as u32) as u16,
+        ws_col: cols.min(u16::MAX as u32) as u16,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    unsafe {
+        libc::ioctl(fd, libc::TIOCSWINSZ as libc::c_ulong, &ws);
+    }
 }
 
 /// 打开指定 WSL 发行版的终端
@@ -333,7 +513,7 @@ pub async fn open_wsl_terminal(
     }
 }
 
-/// 执行远程命令（无 PTY，§7.2 BuildTask 执行器）。
+/// 执行远程命令（无 PTY，BuildTask 执行器）。
 /// stdout/stderr 分离推送；exit code 来自 SSH ExitStatus 语义。
 pub async fn run_exec(
     sessions: &SessionManager,

@@ -1,6 +1,6 @@
-//! 秘密存储抽象（路线图 §9.2）。
+//! 秘密存储抽象。
 //! SQLite 只存 credential_ref，明文密码/私钥口令进入 OS 凭据库：
-//! macOS Keychain / Windows Credential Manager（§10.1）。
+//! macOS Keychain / Windows Credential Manager。
 //! 本模块在 M2 由 ConnectionProfileManager 调用；先落地实现以提前验证 keyring 兼容性。
 
 use keyring::Entry;

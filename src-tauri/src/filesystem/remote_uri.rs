@@ -1,4 +1,4 @@
-//! 资源 URI（路线图 §5.3）：
+//! 资源 URI：
 //! - 本地：普通绝对路径，或 `local://<path>`
 //! - 远程：`remote://<device-identity-uuid><path>`，路径以 `/` 开头
 //! - WSL：`wsl://<distro><path>`，路径以 `/` 开头

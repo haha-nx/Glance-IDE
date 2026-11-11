@@ -1,6 +1,6 @@
-//! 本地文件系统实现（路线图 M1 任务 1.1）。
-//! - 路径做词法规范化，拒绝 `..` 穿越（§12.1 路径穿越单测项）
-//! - 保存采用「临时文件 + rename」近似原子替换（§5.4 第 4 步）
+//! 本地文件系统实现。
+//! - 路径做词法规范化，拒绝 `..` 穿越（路径穿越单测项）
+//! - 保存采用「临时文件 + rename」近似原子替换（第 4 步）
 //! - 保存前冲突检测：expected mtime 与当前不一致时返回 Conflict
 
 use std::path::{Path, PathBuf};
@@ -147,7 +147,7 @@ impl FileSystemProvider for LocalFileSystem {
             return Err(FsError::InvalidPath(format!("目标是目录: {}", file_path.display())));
         }
 
-        // 保存前冲突检测（§5.4 第 3 步）
+        // 保存前冲突检测（第 3 步）
         if let Some(expected) = expected_mtime_ms {
             if let Ok(current) = fs::metadata(&file_path).await {
                 let current_ms = current.modified().ok().map(system_time_to_ms).unwrap_or(0);
@@ -160,7 +160,7 @@ impl FileSystemProvider for LocalFileSystem {
             }
         }
 
-        // 临时文件 + rename（§5.4 第 4 步；依赖文件系统 rename 覆盖语义）
+        // 临时文件 + rename（第 4 步；依赖文件系统 rename 覆盖语义）
         let parent = file_path
             .parent()
             .ok_or_else(|| FsError::InvalidPath(format!("缺少父目录: {path}")))?;

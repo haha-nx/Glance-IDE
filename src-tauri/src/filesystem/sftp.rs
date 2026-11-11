@@ -1,6 +1,6 @@
-//! SFTP 文件系统实现（路线图 M3 任务 3.1，§5.2 统一 Provider 的远程侧）。
+//! SFTP 文件系统实现（统一 Provider 的远程侧）。
 //! 绑定到已验证的 SSH 会话：一个会话打开一个 SFTP subsystem Channel。
-//! 保存前冲突检测与本地实现一致（§5.4 第 3 步）。
+//! 保存前冲突检测与本地实现一致（第 3 步）。
 
 use async_trait::async_trait;
 use russh_sftp::client::fs::Metadata;
@@ -143,7 +143,7 @@ impl FileSystemProvider for SftpFileSystem {
         let clean_path = path.replace('\\', "/");
         let sftp = self.sftp.lock().await;
 
-        // 保存前冲突检测（§5.4 第 3 步）
+        // 保存前冲突检测（第 3 步）
         let current_mtime = match sftp.metadata(&clean_path).await {
             Ok(meta) => Some(Self::mtime_ms(&meta)),
             Err(_) => None,
@@ -166,7 +166,7 @@ impl FileSystemProvider for SftpFileSystem {
         let bytes = content.as_bytes();
         // russh-sftp 的 write() 仅用 WRITE 标志（不 CREATE），
         // 因此用 create()（CREATE|TRUNCATE|WRITE）实现写入。
-        // SFTP v3 无服务端原子替换保证；冲突兜底由 expected 检查与 Diff 流程承担（§5.4）。
+        // SFTP v3 无服务端原子替换保证；冲突兜底由 expected 检查与 Diff 流程承担。
         {
             let mut file = sftp.create(&clean_path).await.map_err(Self::map_err)?;
             use tokio::io::AsyncWriteExt;

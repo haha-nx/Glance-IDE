@@ -63,7 +63,7 @@ export function WslPanel() {
           title="刷新列表"
           onClick={() => void refresh()}
           disabled={loading}
-          className="text-zinc-500 hover:text-zinc-300 disabled:opacity-50"
+          className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 disabled:opacity-50"
         >
           <IconRefresh size={14} />
         </button>

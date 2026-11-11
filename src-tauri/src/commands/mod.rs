@@ -1,4 +1,4 @@
-//! Tauri Commands 薄层（路线图 §11.3）：只做输入校验与服务调用，不承载业务逻辑。
+//! Tauri Commands 薄层：只做输入校验与服务调用，不承载业务逻辑。
 
 pub mod app;
 pub mod discovery;

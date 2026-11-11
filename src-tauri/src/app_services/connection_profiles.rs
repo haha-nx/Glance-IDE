@@ -1,7 +1,7 @@
-//! 连接配置与设备身份数据服务（路线图 M2 任务 2.2/2.3，§04/§09）。
+//! 连接配置与设备身份数据服务。
 //! - Profile 描述「如何连接」，不等于设备身份（ADR-003）
 //! - 一个 Profile 通过 profile_identity_bindings 授权多条设备身份（设备池，ADR-004）
-//! - fingerprint 全局唯一；不以 (host, port) 识别设备（§9.1）
+//! - fingerprint 全局唯一；不以 (host, port) 识别设备
 
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
@@ -304,12 +304,12 @@ pub fn pool_for_profile(db: &Database, profile_id: Uuid) -> RepoResult<Vec<Trust
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     })?;
-    // 克隆镜像指纹防御（§12.2「克隆 Host Key」）
+    // 克隆镜像指纹防御（「克隆 Host Key」）
     validate_pool(&pool).map_err(|e| RepoError::Id(e.to_string()))?;
     Ok(pool)
 }
 
-/// 登记并绑定设备身份（§4.4 第 5 步之后）：指纹已存在则复用并更新，否则新建。
+/// 登记并绑定设备身份（第 5 步之后）：指纹已存在则复用并更新，否则新建。
 /// `blob` 来自握手观测；补登记场景允许为空。
 pub fn approve_identity(
     db: &Database,

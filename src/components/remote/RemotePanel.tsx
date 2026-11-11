@@ -4,6 +4,8 @@ import { wslApi } from "../../services/wsl";
 import { appApi } from "../../services/files";
 import { workspaceApi } from "../../services/workspace";
 import { explorerStore } from "../../stores/explorer";
+import { takePendingProfileConnect, takePendingPrefill } from "../../lib/windowState";
+import { IS_MAC } from "../../lib/platform";
 import {
   CmdError,
   type ConnectOutcome,
@@ -73,18 +75,40 @@ export function RemotePanel() {
 
   useEffect(() => {
     void refreshSsh();
-    void refreshWsl();
+    // macOS 不提供 WSL 功能，跳过探测
+    if (!IS_MAC) void refreshWsl();
   }, [refreshSsh, refreshWsl]);
 
   // 发现面板预填新建 SSH 连接
+  // 发现面板「新建连接 →」预填 host/port：
+  // 面板挂载时先消费暂存数据（发现面板派发事件时本组件可能还没挂载），
+  // 之后再监听事件用于「面板已打开」的场景。
   useEffect(() => {
+    const applyPrefill = (detail: { host: string; port: number } | null) => {
+      if (!detail) return;
+      setActiveTab("ssh");
+      setPrefill(detail);
+      setDialog({ kind: "create" });
+    };
+
+    applyPrefill(takePendingPrefill());
+
+    // 发现面板命中已保存 IP：挂载后直接发起连接
+    const pendingId = takePendingProfileConnect();
+    if (pendingId) {
+      void (async () => {
+        try {
+          const list = await sshApi.listProfiles();
+          const profile = list.find((p) => p.id === pendingId);
+          if (profile) await connectCurrentWindow(profile);
+        } catch {
+          /* 连接失败信息由 connectCurrentWindow 自身呈现 */
+        }
+      })();
+    }
+
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ host: string; port: number }>).detail;
-      if (detail) {
-        setActiveTab("ssh");
-        setPrefill(detail);
-        setDialog({ kind: "create" });
-      }
+      applyPrefill((e as CustomEvent<{ host: string; port: number }>).detail);
     };
     window.addEventListener("glance:prefill-profile", handler);
     return () => window.removeEventListener("glance:prefill-profile", handler);
@@ -197,17 +221,21 @@ export function RemotePanel() {
     <div className="flex h-full flex-col bg-zinc-900 select-none">
       {/* 顶部工具栏：左侧下拉切换，右侧新建/刷新按钮 */}
       <div className="flex h-9 shrink-0 items-center justify-between border-b border-zinc-800 px-2.5">
-        <select
-          value={activeTab}
-          onChange={(e) => setActiveTab(e.target.value as "ssh" | "wsl")}
-          className="rounded border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-200 outline-none hover:border-zinc-600 focus:border-sky-500"
-        >
-          <option value="ssh">SSH 远程设备</option>
-          <option value="wsl">WSL 本地子系统</option>
-        </select>
+        {IS_MAC ? (
+          <span className="px-1 text-xs font-medium text-zinc-200">SSH 远程设备</span>
+        ) : (
+          <select
+            value={activeTab}
+            onChange={(e) => setActiveTab(e.target.value as "ssh" | "wsl")}
+            className="rounded border border-zinc-700 bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-200 outline-none hover:border-zinc-600 focus:border-sky-500"
+          >
+            <option value="ssh">SSH 远程设备</option>
+            <option value="wsl">WSL 本地子系统</option>
+          </select>
+        )}
 
         <div className="flex items-center gap-1">
-          {activeTab === "ssh" ? (
+          {IS_MAC || activeTab === "ssh" ? (
             <button
               title="新建连接配置"
               onClick={() => setDialog({ kind: "create" })}
@@ -294,7 +322,7 @@ export function RemotePanel() {
                       <button
                         title="在新窗口中连接该设备"
                         onClick={() => void appApi.openNewWindow(profile.id)}
-                        className="flex h-6 w-6 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors"
+                        className="flex h-6 w-6 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800/70 hover:text-zinc-100 transition-colors"
                       >
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
@@ -306,13 +334,14 @@ export function RemotePanel() {
                         title="在当前窗口连接并打开工作区"
                         onClick={() => void connectCurrentWindow(profile)}
                         disabled={isConnecting}
-                        className="flex h-6 w-6 items-center justify-center rounded bg-sky-600 text-white hover:bg-sky-500 disabled:opacity-50 transition-colors"
+                        className="flex h-6 w-6 items-center justify-center rounded text-sky-400 hover:bg-sky-500/15 hover:text-sky-300 disabled:opacity-50 transition-colors"
                       >
                         {isConnecting ? (
-                          <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-sky-400 border-t-transparent" />
                         ) : (
-                          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-                            <polygon points="6 4 20 12 6 20 6 4" />
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                            <polyline points="12 5 19 12 12 19" />
                           </svg>
                         )}
                       </button>
@@ -324,8 +353,8 @@ export function RemotePanel() {
           </>
         )}
 
-        {/* WSL 视图 */}
-        {activeTab === "wsl" && (
+        {/* WSL 视图（仅 Windows） */}
+        {!IS_MAC && activeTab === "wsl" && (
           <>
             {wslAvailable === false && (
               <div className="p-3 text-xs text-zinc-500">
@@ -359,7 +388,7 @@ export function RemotePanel() {
                     <button
                       title="在新窗口中连接此 WSL 发行版"
                       onClick={() => void appApi.openNewWindow(undefined, distro.name)}
-                      className="flex h-6 w-6 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors"
+                      className="flex h-6 w-6 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800/70 hover:text-zinc-100 transition-colors"
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
@@ -370,10 +399,11 @@ export function RemotePanel() {
                     <button
                       title="在当前窗口连接并打开工作区"
                       onClick={() => void connectCurrentWsl(distro.name)}
-                      className="flex h-6 w-6 items-center justify-center rounded bg-sky-600 text-white hover:bg-sky-500 transition-colors"
+                      className="flex h-6 w-6 items-center justify-center rounded text-sky-400 hover:bg-sky-500/15 hover:text-sky-300 transition-colors"
                     >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-                        <polygon points="6 4 20 12 6 20 6 4" />
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="5" y1="12" x2="19" y2="12" />
+                        <polyline points="12 5 19 12 12 19" />
                       </svg>
                     </button>
                   </div>

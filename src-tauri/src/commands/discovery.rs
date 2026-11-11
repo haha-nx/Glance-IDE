@@ -1,5 +1,5 @@
 //! 局域网发现 Commands（M5）。
-//! 扫描结果经 Channel 实时推送；扫描不建立信任、不认证（§8.2）。
+//! 扫描结果经 Channel 实时推送；扫描不建立信任、不认证。
 //! 取消模型：每次扫描持有独立取消句柄，启动新扫描/显式取消时置位旧句柄。
 
 use std::net::UdpSocket;
@@ -98,7 +98,7 @@ fn get_windows_physical_default_route() -> Option<String> {
     candidate_interfaces.into_iter().map(|(ip, _)| ip).next()
 }
 
-/// 枚举本机 IPv4 网卡并推算建议扫描范围（§8.2 第 1 步：用户确认后才开始）
+/// 枚举本机 IPv4 网卡并推算建议扫描范围（第 1 步：用户确认后才开始）
 #[tauri::command]
 pub fn discovery_interfaces() -> Vec<InterfaceInfo> {
     let mut result = Vec::new();

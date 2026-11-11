@@ -74,11 +74,21 @@ pub async fn open_new_window(
         "?blank=1".to_string()
     };
     let url_str = format!("index.html{query}");
-    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url_str.into()))
+    let builder = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url_str.into()))
         .title("Glance IDE")
         .inner_size(1360.0, 860.0)
-        .min_inner_size(940.0, 600.0)
-        .decorations(false)
+        .min_inner_size(940.0, 600.0);
+
+    // macOS 保留原生窗口框架（红绿灯/圆角/阴影），内容叠加进标题栏；Windows 用无边框自绘标题栏
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .decorations(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.decorations(false);
+
+    builder
         .build()
         .map_err(|e| format!("打开新窗口失败: {e}"))?;
     Ok(())

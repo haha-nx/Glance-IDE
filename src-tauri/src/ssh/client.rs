@@ -1,9 +1,9 @@
-//! russh 客户端集成（路线图 M2 任务 2.4/2.5）。
+//! russh 客户端集成。
 //!
-//! 连接编排（§4.4 流程）：
+//! 连接编排（流程）：
 //! 1. TCP + SSH 握手；`check_server_key` 中取得服务器 Host Key
 //! 2. 计算指纹 → 与 Profile 设备池匹配；未命中 → 拒绝该密钥（握手终止），
-//!    返回 UnknownIdentity / IdentityChanged（§11.2 ConnectOutcome 三态）
+//!    返回 UnknownIdentity / IdentityChanged（ConnectOutcome 三态）
 //! 3. 命中 → 用户认证（密码 / 私钥）→ 会话建立
 //!
 //! 该模块不含数据库与 UI 依赖，可独立用于互操作测试。
@@ -22,7 +22,7 @@ use super::host_key_verifier::fingerprint_from_blob;
 
 pub use russh::client::Handle as SshHandle;
 
-/// 连接与握手超时（M2 初始值，后续按实测网络调整，§8.3）
+/// 连接与握手超时（M2 初始值，后续按实测网络调整）
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
@@ -51,7 +51,7 @@ impl client::Handler for ClientHandler {
     ) -> Result<bool, Self::Error> {
         let key = server_public_key.public_key();
         let blob = key.public_key_bytes();
-        // blob 指纹与 OpenSSH `ssh-keygen -lf` 一致（§4.3 fingerprint_sha256）
+        // blob 指纹与 OpenSSH `ssh-keygen -lf` 一致（fingerprint_sha256）
         let Ok(fingerprint) = fingerprint_from_blob(&blob) else {
             return Err(russh::Error::UnknownKey);
         };
@@ -85,9 +85,9 @@ pub enum ConnectStep {
         device_identity_id: Uuid,
         device_name: Option<String>,
     },
-    /// 设备池为空时的首次新设备（§12.2「A 首次登记」）
+    /// 设备池为空时的首次新设备（「A 首次登记」）
     UnknownIdentity { observed: ObservedServerKey },
-    /// 设备池非空但指纹未命中：设备轮换未登记或密钥变化（§11.2 identityChanged）
+    /// 设备池非空但指纹未命中：设备轮换未登记或密钥变化（identityChanged）
     IdentityChanged {
         observed: ObservedServerKey,
         expected: Vec<String>,

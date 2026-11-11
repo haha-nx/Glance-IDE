@@ -1,11 +1,11 @@
-//! 设备池匹配逻辑（路线图 §4.4 / §4.5 / §11.2，ADR-004/007）。
+//! 设备池匹配逻辑（ADR-004/007）。
 //!
 //! 连接流程中的身份判定顺序：
 //! 1. SSH 握手取得服务器 Host Key → 指纹
 //! 2. 在当前 Profile 的已授权设备池中查找（`match_fingerprint`）
 //! 3. 命中 → 放行进入用户认证；未命中 → 阻断，进入登记/核验流程
 //! 4. 登记流程中结合「该端点上一次出现的身份」区分首次新设备与密钥变化
-//!    （`classify_registration`，§11.2 identityChanged 语义）
+//!    （`classify_registration` 的 identityChanged 语义）
 //!
 //! 本模块为纯逻辑，无网络依赖；russh 接入层（M2 client.rs）只负责把握手
 //! 得到的 blob 送入 `host_key_verifier::fingerprint_from_blob`。
@@ -32,7 +32,7 @@ pub enum PoolError {
     InvalidFingerprint(String),
 }
 
-/// 池内一致性校验：指纹必须合法且互不相同（§12.2「克隆 Host Key」验收项）。
+/// 池内一致性校验：指纹必须合法且互不相同（「克隆 Host Key」验收项）。
 pub fn validate_pool(pool: &[TrustedDevice]) -> Result<(), PoolError> {
     let mut seen = HashSet::new();
     for device in pool {
@@ -69,9 +69,9 @@ pub fn match_fingerprint(pool: &[TrustedDevice], fingerprint: &str) -> MatchOutc
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistrationContext {
-    /// 首次发现的新设备身份（带外核对后登记，§4.4 第 5 步）
+    /// 首次发现的新设备身份（带外核对后登记， 第 5 步）
     FirstRegistration,
-    /// 该端点此前出现过的池内身份，本次指纹不同 → 疑似重装/密钥轮换（§4.5）
+    /// 该端点此前出现过的池内身份，本次指纹不同 → 疑似重装/密钥轮换
     KeyChange {
         previous_device_identity_id: Uuid,
         previous_display_name: String,
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn rotation_a_b_a_matches_pool() {
-        // §12.2「A/B/A 轮换」：池含 A、B，三次连接均自动命中
+        // 「A/B/A 轮换」：池含 A、B，三次连接均自动命中
         let pool = vec![device("a", FP_A, "Raspberry Pi A"), device("b", &fp_b(), "Raspberry Pi B")];
         validate_pool(&pool).unwrap();
 
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn unknown_device_c_blocked() {
-        // §12.2「未登记 C」：同 IP 同账号密码，但指纹不在池 → 阻断
+        // 「未登记 C」：同 IP 同账号密码，但指纹不在池 → 阻断
         let pool = vec![device("a", FP_A, "Raspberry Pi A")];
         assert_eq!(match_fingerprint(&pool, &fp_b()), MatchOutcome::NotInPool);
         assert_eq!(match_fingerprint(&[], FP_A), MatchOutcome::NotInPool);
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn key_change_detected_with_history() {
-        // §12.2「A 密钥变化」：端点上次是 A，这次指纹不同 → KeyChange
+        // 「A 密钥变化」：端点上次是 A，这次指纹不同 → KeyChange
         let device_a = device("a", FP_A, "Raspberry Pi A");
         let pool = vec![device_a.clone()];
         let context = classify_registration(&pool, &fp_b(), Some(&device_a));
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn first_registration_without_history() {
-        // §12.2「B 首次登记」：A 断开、B 接入同 IP；无端点历史记录时按首次登记处理
+        // 「B 首次登记」：A 断开、B 接入同 IP；无端点历史记录时按首次登记处理
         let device_a = device("a", FP_A, "Raspberry Pi A");
         let pool = vec![device_a.clone()];
         let context = classify_registration(&pool, &fp_b(), None);
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn duplicate_fingerprint_rejected() {
-        // §12.2「克隆 Host Key」：两台设备同指纹 → 明确报错
+        // 「克隆 Host Key」：两台设备同指纹 → 明确报错
         let pool = vec![device("a", FP_A, "A"), device("b", FP_A, "B")];
         let err = validate_pool(&pool).unwrap_err();
         assert!(matches!(err, PoolError::DuplicateFingerprint(_)));

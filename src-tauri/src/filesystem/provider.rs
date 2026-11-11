@@ -34,7 +34,7 @@ pub struct WriteResult {
 }
 
 /// 文件系统错误。序列化形状：`{ code, message, currentMtimeMs?, size?, limit? }`，
-/// 前端按 `code === "conflict"` 等分支处理（保存冲突不静默覆盖，路线图 §5.4）。
+/// 前端按 `code === "conflict"` 等分支处理（保存冲突不静默覆盖）。
 #[derive(Debug, thiserror::Error)]
 pub enum FsError {
     #[error("IO 错误: {0}")]
@@ -89,10 +89,10 @@ impl Serialize for FsError {
 
 pub type FsResult<T> = Result<T, FsError>;
 
-/// 超过该大小的文件拒绝读取（阈值后续按性能实测调整，§2.4）
+/// 超过该大小的文件拒绝读取（阈值后续按性能实测调整）
 pub const READ_LIMIT_BYTES: u64 = 20 * 1024 * 1024;
 
-/// 统一文件系统 Provider（路线图 §5.2 接口示意）。
+/// 统一文件系统 Provider（接口示意）。
 /// `expected_mtime_ms` 用于保存前冲突检测：与当前 mtime 不一致时返回 `FsError::Conflict`。
 #[async_trait]
 pub trait FileSystemProvider: Send + Sync {

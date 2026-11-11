@@ -109,7 +109,7 @@ export function SshPanel() {
       const profile = register.profile;
       setRegister(null);
       await refresh();
-      // 登记完成后立即重试连接（§4.4 第 5→6 步）
+      // 登记完成后立即重试连接（第 5→6 步）
       await connect(profile);
     } catch (err) {
       setConnectError(err instanceof CmdError ? err.message : String(err));
@@ -160,7 +160,7 @@ export function SshPanel() {
 
   async function disconnect(sessionId: string) {
     try {
-      // 通知远程 LSP 桥释放该设备上下文（§6.5）
+      // 通知远程 LSP 桥释放该设备上下文
       const session = sessions.find((s) => s.sessionId === sessionId);
       await sshApi.disconnectSession(sessionId);
       if (session) {
@@ -201,7 +201,7 @@ export function SshPanel() {
     }
   }
 
-  /** 远程语言环境检测（M6 基础，§6.6）：只读探测，不安装任何东西 */
+  /** 远程语言环境检测（M6 基础）：只读探测，不安装任何东西 */
   const [envInfo, setEnvInfo] = useState<string | null>(null);
   const [envBusy, setEnvBusy] = useState(false);
   async function detectEnvironment(session: SessionDto) {
@@ -242,7 +242,7 @@ export function SshPanel() {
         <button
           title="新建连接配置"
           onClick={() => setDialog({ kind: "create" })}
-          className="text-zinc-500 hover:text-zinc-300"
+          className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
         >
           <IconPlus size={14} />
         </button>

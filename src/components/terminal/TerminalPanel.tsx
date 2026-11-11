@@ -14,6 +14,8 @@ import { tabsStore } from "../../stores/tabs";
 import { explorerStore } from "../../stores/explorer";
 import { settingsStore, type AppTheme } from "../../stores/settings";
 import { parseProblems, resolveProblemPath, type Problem } from "../../lib/problems";
+import { isBlankWindow } from "../../lib/windowState";
+import { IS_MAC } from "../../lib/platform";
 import type { SessionDto } from "../../types/ssh";
 import type { WslDistroDto } from "../../types/wsl";
 import { IconClose } from "../common/icons";
@@ -73,6 +75,8 @@ interface TermTabItem {
   title: string;
   type: "local" | "wsl" | "ssh";
   channelId: string;
+  /** SSH 终端关联的设备身份，用于会话掉线时精准回收对应标签 */
+  deviceIdentityId?: string;
   term: XTerm;
   fit: FitAddon;
   container: HTMLDivElement;
@@ -128,10 +132,12 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   const fontSize = settingsStore((s) => s.fontSize);
   const theme = settingsStore((s) => s.theme);
 
-  // 刷新会话与 WSL 发行版
+  // 刷新会话与 WSL 发行版（macOS 不提供 WSL）
   useEffect(() => {
     sshApi.listSessions().then(setSessions).catch(() => setSessions([]));
-    wslApi.listDistros().then(setWslDistros).catch(() => setWslDistros([]));
+    if (!IS_MAC) {
+      wslApi.listDistros().then(setWslDistros).catch(() => setWslDistros([]));
+    }
 
     return () => {
       for (const item of termsMapRef.current.values()) {
@@ -149,6 +155,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       type: "local" | "wsl" | "ssh",
       openFn: (onEvent: (e: TerminalEvent) => void) => Promise<{ channelId: string }>,
       targetPaneId?: string,
+      deviceIdentityId?: string,
     ) => {
       const { Terminal } = await import("@xterm/xterm");
       const { fontSize: curFontSize, theme: curTheme } = settingsStore.getState();
@@ -182,6 +189,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
         title,
         type,
         channelId: info.channelId,
+        deviceIdentityId,
         term,
         fit,
         container: div,
@@ -253,7 +261,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
     (session: SessionDto, targetPaneId?: string) => {
       void attachTerminal(session.deviceName || `SSH: ${session.endpoint}`, "ssh", async (onEvent) => {
         return terminalApi.open(session.sessionId, 80, 24, onEvent);
-      }, targetPaneId);
+      }, targetPaneId, session.deviceIdentityId);
     },
     [attachTerminal],
   );
@@ -261,7 +269,10 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   // 新建当前窗口对应设备的终端（当前是本机就新建本机的，ssh就新建ssh的，wsl新建wsl的）
   const createTerminalForCurrentDevice = useCallback(
     async (targetPaneId?: string) => {
-      const root = explorerStore.getState().rootPath || localStorage.getItem("glance.recentRoot");
+      // 空白窗口不读取共享 localStorage 的历史工作区，避免继承主窗口的 SSH/WSL 环境
+      const root =
+        explorerStore.getState().rootPath ||
+        (isBlankWindow() ? null : localStorage.getItem("glance.recentRoot"));
 
       // 1. 如果当前工作区是 SSH 远程工作区（remote://...）
       if (root?.startsWith("remote://")) {
@@ -284,8 +295,8 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
         }
       }
 
-      // 2. 如果工作区是 WSL 子系统（wsl://...）
-      if (root?.startsWith("wsl://")) {
+      // 2. 如果工作区是 WSL 子系统（wsl://...）；macOS 无 WSL
+      if (!IS_MAC && root?.startsWith("wsl://")) {
         const match = root.match(/^wsl:\/\/([^/]+)/);
         const distro = match ? match[1] : (wslDistros[0]?.name || null);
         if (distro) {
@@ -295,15 +306,18 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       }
 
       // 3. 检查当前是否有活跃的 SSH 会话（例如在远程面板连接后未打开文件夹）
-      let liveSessions: SessionDto[] = [];
-      try {
-        liveSessions = await sshApi.listSessions();
-        if (liveSessions.length > 0) setSessions(liveSessions);
-      } catch {}
+      //    空白窗口例外：SSH 会话是进程级共享的，空白窗口不该被别处会话带偏。
+      if (!isBlankWindow()) {
+        let liveSessions: SessionDto[] = [];
+        try {
+          liveSessions = await sshApi.listSessions();
+          if (liveSessions.length > 0) setSessions(liveSessions);
+        } catch {}
 
-      if (liveSessions.length > 0 && (!root || root.startsWith("remote://"))) {
-        openSshTerminal(liveSessions[0], targetPaneId);
-        return;
+        if (liveSessions.length > 0 && (!root || root.startsWith("remote://"))) {
+          openSshTerminal(liveSessions[0], targetPaneId);
+          return;
+        }
       }
 
       // 4. 否则打开本机系统终端
@@ -312,23 +326,33 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
     [wslDistros, openSshTerminal, openWslTerminal, openLocalTerminal],
   );
 
-  // 初始加载时若无终端，自动打开对应环境终端
+  // 初始加载时若无终端，自动打开对应环境终端。
+  //
+  // 注意：createTerminalForCurrentDevice 的身份会随 wslDistros / sessions 加载而改变，
+  // 若把它放进依赖数组，effect 会在「首次创建仍在途、termsMapRef 尚为空」时二次触发，
+  // 表现为关闭最后一个终端后重开面板出现两个终端。这里用 ref 持有最新实现 + 一次性标记。
+  const createDeviceTerminalRef = useRef(createTerminalForCurrentDevice);
+  createDeviceTerminalRef.current = createTerminalForCurrentDevice;
+  const autoOpenedRef = useRef(false);
+
   useEffect(() => {
-    if (tab === "terminal" && termsMapRef.current.size === 0) {
-      const recentRoot = localStorage.getItem("glance.recentRoot");
-      const lastProfile = localStorage.getItem("glance.lastSshProfileId");
-      if (recentRoot?.startsWith("remote://") || lastProfile) {
-        // 如果上次处于 SSH 工作区，设置 2.5s 定时降级，等待 SSH 连接完成触发自动创建
-        const timer = setTimeout(() => {
-          if (termsMapRef.current.size === 0) {
-            void createTerminalForCurrentDevice();
-          }
-        }, 2500);
-        return () => clearTimeout(timer);
-      }
-      void createTerminalForCurrentDevice();
+    if (tab !== "terminal" || autoOpenedRef.current) return;
+    if (termsMapRef.current.size > 0) return;
+    autoOpenedRef.current = true;
+
+    const recentRoot = isBlankWindow() ? null : localStorage.getItem("glance.recentRoot");
+    const lastProfile = isBlankWindow() ? null : localStorage.getItem("glance.lastSshProfileId");
+    if (recentRoot?.startsWith("remote://") || lastProfile) {
+      // 如果上次处于 SSH 工作区，设置 2.5s 定时降级，等待 SSH 连接完成触发自动创建
+      const timer = setTimeout(() => {
+        if (termsMapRef.current.size === 0) {
+          void createDeviceTerminalRef.current();
+        }
+      }, 2500);
+      return () => clearTimeout(timer);
     }
-  }, [tab, createTerminalForCurrentDevice]);
+    void createDeviceTerminalRef.current();
+  }, [tab]);
 
   // 监听 SSH 连接与断开事件，动态同步最新会话池
   useEffect(() => {
@@ -354,10 +378,49 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       } catch {}
     };
 
-    const handleDisconnected = async () => {
+    const handleDisconnected = async (e: Event) => {
+      const lostDeviceId = (e as CustomEvent<{ deviceIdentityId?: string }>).detail
+        ?.deviceIdentityId;
       try {
         const list = await sshApi.listSessions();
         setSessions(list);
+
+        // 会话已消失：回收对应的 SSH 终端标签（其 PTY 通道也会随传输断开而结束）
+        const aliveDeviceIds = new Set(list.map((s) => s.deviceIdentityId));
+        const staleIds = [...termsMapRef.current.values()]
+          .filter((t) => {
+            if (t.type !== "ssh") return false;
+            // 已知掉线设备：精确匹配；否则退化为「设备已无活跃会话」
+            if (lostDeviceId) return t.deviceIdentityId === lostDeviceId;
+            return !t.deviceIdentityId || !aliveDeviceIds.has(t.deviceIdentityId);
+          })
+          .map((t) => t.id);
+
+        for (const id of staleIds) {
+          const item = termsMapRef.current.get(id);
+          if (!item) continue;
+          void terminalApi.close(item.channelId).catch(() => {});
+          item.term.dispose();
+          item.container.remove();
+          termsMapRef.current.delete(id);
+        }
+        if (staleIds.length > 0) {
+          setTerms([...termsMapRef.current.values()]);
+          setPanes((prev) => {
+            const next = prev.map((p) => {
+              const tabIds = p.tabIds.filter((tid) => !staleIds.includes(tid));
+              return {
+                ...p,
+                tabIds,
+                activeId:
+                  p.activeId && tabIds.includes(p.activeId)
+                    ? p.activeId
+                    : (tabIds[tabIds.length - 1] ?? null),
+              };
+            });
+            return next.length > 1 ? next.filter((p) => p.tabIds.length > 0) : next;
+          });
+        }
       } catch {}
     };
 
@@ -832,7 +895,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
                               e.stopPropagation();
                               closeTerminal(t.id);
                             }}
-                            className={`rounded p-0.5 hover:text-red-400 ${
+                            className={`rounded p-0.5 hover:bg-zinc-800 hover:text-red-400 ${
                               isActive ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-80"
                             }`}
                             title="关闭终端"

@@ -987,7 +987,8 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
               <span className="font-semibold text-sm text-zinc-200">插入表格</span>
               <button
                 onClick={() => setTableModalOpen(false)}
-                className="text-zinc-500 hover:text-zinc-300"
+                className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                title="关闭"
               >
                 <IconClose size={14} />
               </button>

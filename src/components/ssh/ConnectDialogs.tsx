@@ -12,7 +12,7 @@ interface RegisterIdentityDialogProps {
 }
 
 /**
- * 未知/变化 Host Key 的登记对话框（路线图 §4.5，ADR-007）：
+ * 未知/变化 Host Key 的登记对话框（ADR-007）：
  * - unknownIdentity：设备池为空的首次登记
  * - identityChanged：端点返回的指纹不属于设备池（轮换未登记 或 密钥变化）
  * 两者都必须由用户明确登记，绝不自动放行。

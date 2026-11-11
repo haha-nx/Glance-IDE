@@ -1,6 +1,6 @@
 //! 远程语言智能 Commands（M6）：
-//! - 检测：lsp_detect / project_detect（§6.6，只读不安装）
-//! - 传输桥：lsp_open / lsp_send / lsp_close（§6.4 冻结方案：Tauri Channel + Rust 组帧）
+//! - 检测：lsp_detect / project_detect（只读不安装）
+//! - 传输桥：lsp_open / lsp_send / lsp_close（冻结方案：Tauri Channel + Rust 组帧）
 
 use serde::Serialize;
 use tauri::State;

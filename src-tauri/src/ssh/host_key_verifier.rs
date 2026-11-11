@@ -1,10 +1,10 @@
-//! Host Key 指纹计算与规范化（路线图 §4.3）。
+//! Host Key 指纹计算与规范化。
 //!
 //! SSH 指纹 = `SHA256:` + Base64(SHA-256(公钥 wire blob))（OpenSSH 风格，无填充）。
 //! authorized_keys / known_hosts 行中的 Base64 主体本身就是 SSH wire 格式公钥 blob，
 //! 因此无需解析具体算法即可计算指纹（与 `ssh-keygen -lf` 一致）。
 //!
-//! 边界（§4.3 重要边界）：指纹代表 SSH 服务器密钥身份，不是硬件身份。
+//! 边界（重要边界）：指纹代表 SSH 服务器密钥身份，不是硬件身份。
 
 use base64::Engine as _;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
@@ -64,7 +64,7 @@ pub fn parse_public_key_line(line: &str) -> Result<(String, String, Option<Strin
     Ok((algo.to_string(), fingerprint, comment))
 }
 
-/// 规范化指纹字符串，用于存储与比较（§4.3 fingerprint_sha256）。
+/// 规范化指纹字符串，用于存储与比较（fingerprint_sha256）。
 /// 接受 `SHA256:xxx`（可带 `=` 填充，前缀大小写不敏感）或裸 32 字节 Base64 摘要；
 /// 输出统一为 `SHA256:<无填充 Base64>`。
 pub fn normalize_fingerprint(raw: &str) -> Result<String, FingerprintError> {

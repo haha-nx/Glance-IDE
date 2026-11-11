@@ -36,7 +36,7 @@ export function UnsavedCloseModal() {
   );
 }
 
-/** 保存冲突（远端文件已被修改）——遵循路线图 §5.4：默认不静默覆盖 */
+/** 保存冲突（远端文件已被修改）——遵循：默认不静默覆盖 */
 export function SaveConflictModal() {
   const conflict = tabsStore((s) => s.pendingConflict);
   const loadRemote = tabsStore((s) => s.resolveConflictLoadRemote);

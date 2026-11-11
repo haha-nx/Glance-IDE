@@ -2,13 +2,13 @@ import { monaco, languageForFileName } from "./monaco";
 import { tabsStore } from "../stores/tabs";
 
 /**
- * Monaco Model 注册表（路线图 §2.4/§6.1）：
+ * Monaco Model 注册表：
  * - 同一资源 URI 只创建一个稳定 Model
  * - modelUri 使用自定义 scheme，本地为 local://<posix-path>
  * - 远程资源（M3）将使用 remote://<device-identity-id>/<path>，天然按设备隔离
  */
 
-/** 资源路径 → Model URI（§5.3）：远程 remote:// 与 wsl:// 本身即稳定 URI；本地加 local:// 前缀 */
+/** 资源路径 → Model URI：远程 remote:// 与 wsl:// 本身即稳定 URI；本地加 local:// 前缀 */
 export function toModelUri(path: string): string {
   const normalized = path.replace(/\\/g, "/");
   if (normalized.startsWith("remote://") || normalized.startsWith("wsl://")) return normalized;
