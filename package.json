@@ -1,7 +1,7 @@
 {
   "name": "glance-ide",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Glance IDE — 本地/远程一体化开发工作台",
   "type": "module",
   "scripts": {

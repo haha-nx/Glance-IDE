@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag to attach binaries to (e.g. v0.1.1)'
+        description: 'Release tag to attach binaries to (e.g. v0.1.2)'
         required: false
-        default: 'v0.1.1'
+        default: 'v0.1.2'
 
 permissions:
   contents: write
@@ -45,7 +45,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || 'v0.1.1' }}"
+          TAG="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || 'v0.1.2' }}"
           echo "Target release tag: $TAG"
           gh release view "$TAG" || gh release create "$TAG" --title "Glance IDE $TAG" --notes "Glance IDE $TAG 发布版本"
           find src-tauri/target -name "*.dmg" -o -name "*.app.tar.gz" | while read -r file; do

@@ -69,7 +69,7 @@ function ToggleSwitch({
 /** Glance IDE 完整设置界面：外观/字体/主题、GitHub 版本检测与更新、关于信息 */
 export function SettingsModal({ onClose, initialSection = "appearance" }: SettingsModalProps) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
-  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.1" });
+  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.2" });
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const fontSize = settingsStore((s) => s.fontSize);
