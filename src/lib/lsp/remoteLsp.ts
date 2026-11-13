@@ -77,6 +77,13 @@ type Json = Record<string, unknown>;
 interface PendingRequest {
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+function isPathWithinRoot(path: string, root: string): boolean {
+  const cleanRoot = root.length > 1 && root.endsWith("/") ? root.slice(0, -1) : root;
+  if (cleanRoot === "/") return path.startsWith("/");
+  return path === cleanRoot || path.startsWith(`${cleanRoot}/`);
 }
 
 // ── 控制器：一个 (device, workspace, language) 一条远程语言服务器 ──────────────
@@ -98,23 +105,39 @@ class RemoteLspController {
   private providers: monaco.IDisposable[] = [];
   private disposed = false;
   private started = false;
+  private currentStatus: LspStatus | null = null;
+  private readonly onStatusChanged?: () => void;
+  private readonly onDisposed?: () => void;
 
-  constructor(deviceId: string, sessionId: string, workspaceRoot: string, languageId: string) {
+  constructor(
+    deviceId: string,
+    sessionId: string,
+    workspaceRoot: string,
+    languageId: string,
+    callbacks?: { onStatusChanged?: () => void; onDisposed?: () => void },
+  ) {
     this.deviceId = deviceId;
     this.sessionId = sessionId;
     this.workspaceRoot = workspaceRoot;
     this.languageId = languageId;
+    this.onStatusChanged = callbacks?.onStatusChanged;
+    this.onDisposed = callbacks?.onDisposed;
+  }
+
+  get status(): LspStatus | null {
+    return this.disposed ? null : this.currentStatus;
   }
 
   /** 启动：开通道 → initialize 握手 → 注册 Provider → 补打开已存在文档 */
   async start(): Promise<void> {
-    if (this.started) return;
+    if (this.started || this.disposed) return;
     this.started = true;
     this.updateStatus("starting");
     await this.openChannel();
   }
 
   private async openChannel(): Promise<void> {
+    if (this.disposed) return;
     const specs = SERVER_SPECS[this.languageId] ?? [];
     const spec = specs[this.specIndex];
     if (!spec) {
@@ -130,6 +153,10 @@ class RemoteLspController {
         spec.args,
         (e) => this.onEvent(e),
       );
+      if (this.disposed) {
+        void lspApi.close(info.lspId).catch(() => {});
+        return;
+      }
       this.lspId = info.lspId;
       this.updateStatus("starting", { server: spec.server });
       await this.handshake(spec.server);
@@ -139,6 +166,7 @@ class RemoteLspController {
   }
 
   private async handshake(server: string): Promise<void> {
+    if (this.disposed) return;
     try {
       const result = (await this.request("initialize", {
         processId: null,
@@ -150,6 +178,7 @@ class RemoteLspController {
           },
         },
       })) as Json;
+      if (this.disposed) return;
       this.notify("initialized", {});
       this.registerProviders(result);
       for (const [uri, model] of this.openedDocs) {
@@ -164,6 +193,7 @@ class RemoteLspController {
   /** 服务器启动失败/握手失败：尝试下一候选（降级可见） */
   private async failover(reason: string): Promise<void> {
     this.cleanupChannel();
+    if (this.disposed) return;
     const specs = SERVER_SPECS[this.languageId] ?? [];
     if (this.specIndex + 1 < specs.length) {
       this.specIndex += 1;
@@ -193,6 +223,7 @@ class RemoteLspController {
     if (id != null && (msg.result !== undefined || msg.error !== undefined)) {
       const p = this.pending.get(id);
       if (p) {
+        clearTimeout(p.timer);
         this.pending.delete(id);
         if (msg.error) {
           p.reject(new Error(JSON.stringify(msg.error)));
@@ -345,17 +376,18 @@ class RemoteLspController {
       const locations = Array.isArray(result) ? result : result ? [result] : [];
       const out: Array<{ uri: monaco.Uri; range: monaco.IRange }> = [];
       for (const loc of locations) {
-        const docUri = loc.uri as string | undefined;
+        const docUri = (loc.uri ?? loc.targetUri) as string | undefined;
         if (!docUri) continue;
-        const range = (loc.range ?? ((loc.targetSelectionRange as Json) ?? {})) as Json;
+        const range = (loc.range ?? loc.targetSelectionRange ?? loc.targetRange ?? {}) as Json;
         const start = (range.start ?? { line: 0, character: 0 }) as Json;
+        const end = (range.end ?? start) as Json;
         out.push({
           uri: monaco.Uri.parse(fromDocUri(docUri, this.deviceId)),
           range: {
             startLineNumber: ((start.line as number) ?? 0) + 1,
             startColumn: ((start.character as number) ?? 0) + 1,
-            endLineNumber: ((start.line as number) ?? 0) + 1,
-            endColumn: 1,
+            endLineNumber: ((end.line as number) ?? 0) + 1,
+            endColumn: ((end.character as number) ?? 0) + 1,
           },
         });
       }
@@ -375,7 +407,11 @@ class RemoteLspController {
   private canServe(model: monaco.editor.ITextModel): boolean {
     if (this.disposed || !this.lspId) return false;
     const parsed = parseRemoteUri(model.uri.toString());
-    return parsed != null && parsed.deviceId === this.deviceId;
+    return (
+      parsed != null &&
+      parsed.deviceId === this.deviceId &&
+      isPathWithinRoot(parsed.path, this.workspaceRoot)
+    );
   }
 
   /** 管理器入口：模型打开即挂接（无论是否激活标签，诊断需后台推送） */
@@ -455,15 +491,17 @@ class RemoteLspController {
 
   // ── 请求/通知 ─────────────────────────────────────────────────────────────
 
-  private request(method: string, params: unknown): Promise<unknown> {
-    const id = this.nextId++;
-    const promise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-    });
-    if (!this.lspId || !lspApi.send(this.lspId, { jsonrpc: "2.0", id, method, params })) {
-      this.pending.delete(id);
-      return Promise.reject(new Error("LSP 通道不可用"));
+  private async request(method: string, params: unknown): Promise<unknown> {
+    if (!this.lspId || this.disposed) {
+      throw new Error("LSP 通道不可用");
     }
+    const id = this.nextId++;
+    let settleResolve!: (result: unknown) => void;
+    let settleReject!: (err: Error) => void;
+    const promise = new Promise<unknown>((resolve, reject) => {
+      settleResolve = resolve;
+      settleReject = reject;
+    });
     // 请求超时（避免悬挂）：30s
     const timer = setTimeout(() => {
       const p = this.pending.get(id);
@@ -472,31 +510,56 @@ class RemoteLspController {
         p.reject(new Error("LSP 请求超时"));
       }
     }, 30_000);
-    void timer;
+    this.pending.set(id, { resolve: settleResolve, reject: settleReject, timer });
+
+    try {
+      const sent = await lspApi.send(this.lspId, { jsonrpc: "2.0", id, method, params });
+      if (!sent) {
+        const p = this.pending.get(id);
+        if (p) {
+          clearTimeout(p.timer);
+          this.pending.delete(id);
+          p.reject(new Error("LSP 通道不可用"));
+        }
+      }
+    } catch (err) {
+      const p = this.pending.get(id);
+      if (p) {
+        clearTimeout(p.timer);
+        this.pending.delete(id);
+        p.reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
     return promise;
   }
 
   private notify(method: string, params: unknown): void {
     if (!this.lspId) return;
-    void lspApi.send(this.lspId, { jsonrpc: "2.0", method, params });
+    void lspApi.send(this.lspId, { jsonrpc: "2.0", method, params }).catch(() => {});
   }
 
   // ── 生命周期 ──────────────────────────────────────────────────────────────
 
   private updateStatus(state: LspStatus["state"], extra?: { server?: string; message?: string }): void {
-    lspStatusStore.getState().set(this.deviceId, {
+    if (this.disposed) return;
+    this.currentStatus = {
       state,
-      server: extra?.server ?? lspStatusStore.getState().statuses[this.deviceId]?.server,
+      server: extra?.server ?? this.currentStatus?.server,
       message: extra?.message,
-    });
+    };
+    this.onStatusChanged?.();
   }
 
   private cleanupChannel(): void {
-    this.pending.forEach((p) => p.reject(new Error("LSP 通道已关闭")));
+    this.pending.forEach((p) => {
+      clearTimeout(p.timer);
+      p.reject(new Error("LSP 通道已关闭"));
+    });
     this.pending.clear();
     if (this.lspId) {
-      void lspApi.close(this.lspId);
+      const closeId = this.lspId;
       this.lspId = null;
+      void lspApi.close(closeId).catch(() => {});
     }
   }
 
@@ -504,6 +567,12 @@ class RemoteLspController {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.currentStatus = null;
+    // 先同步摘除 Monaco Provider 与变更监听，避免 shutdown 异步等待期间继续被调用
+    const providers = this.providers;
+    this.providers = [];
+    providers.forEach((d) => d.dispose());
+
     for (const [uri, model] of this.openedDocs) {
       if (!model.isDisposed() && this.lspId) {
         this.notify("textDocument/didClose", {
@@ -521,6 +590,8 @@ class RemoteLspController {
     this.cachedMarkers.clear();
     this.changeDisposals.clear();
     this.debounceTimers.clear();
+    this.onDisposed?.();
+
     if (this.lspId) {
       try {
         await lspApi.send(this.lspId, { jsonrpc: "2.0", id: this.nextId++, method: "shutdown", params: null });
@@ -530,9 +601,6 @@ class RemoteLspController {
       }
     }
     this.cleanupChannel();
-    this.providers.forEach((d) => d.dispose());
-    this.providers = [];
-    lspStatusStore.getState().clear(this.deviceId);
   }
 }
 
@@ -670,11 +738,32 @@ function normalizeHoverContents(contents: unknown): string | null {
 
 class LspManager {
   private controllers = new Map<string, RemoteLspController>();
+  private inFlight = new Map<string, Promise<void>>();
+  private deviceGen = new Map<string, number>();
   /** deviceId → 已挂接模型 URI 集合（控制器就绪前到达的模型在此排队） */
   private modelUris = new Map<string, Set<string>>();
 
   private key(deviceId: string, workspace: string, language: string): string {
     return `${deviceId}|${workspace}|${language}`;
+  }
+
+  private syncDeviceStatus(deviceId: string): void {
+    const statuses: LspStatus[] = [];
+    for (const c of this.controllers.values()) {
+      if (c.deviceId === deviceId && c.status) {
+        statuses.push(c.status);
+      }
+    }
+    if (statuses.length === 0) {
+      lspStatusStore.getState().clear(deviceId);
+      return;
+    }
+    const pick =
+      statuses.find((s) => s.state === "ready") ??
+      statuses.find((s) => s.state === "starting") ??
+      statuses.find((s) => s.state === "failed") ??
+      statuses[0];
+    lspStatusStore.getState().set(deviceId, pick);
   }
 
   /** 模型创建事件入口（models.ts 经 window 事件解耦） */
@@ -698,6 +787,7 @@ class LspManager {
 
   /** 会话断开/设备下线：释放该设备全部控制器 */
   async disposeDevice(deviceId: string): Promise<void> {
+    this.deviceGen.set(deviceId, (this.deviceGen.get(deviceId) ?? 0) + 1);
     const keys = [...this.controllers.keys()].filter((k) =>
       k.startsWith(`${deviceId}|`),
     );
@@ -706,6 +796,7 @@ class LspManager {
       this.controllers.delete(k);
       await c?.dispose();
     }
+    this.syncDeviceStatus(deviceId);
   }
 
   private async ensureController(uri: string, parsed: { deviceId: string; path: string }): Promise<void> {
@@ -715,18 +806,24 @@ class LspManager {
     if (!model) return;
     const languageId = model.getLanguageId();
     if (!SERVER_SPECS[languageId]) {
-      lspStatusStore.getState().set(parsed.deviceId, {
-        state: "closed",
-        message: `${languageId} 无远程语言服务器支持`,
-      });
+      if (this.controllers.size === 0 || ![...this.controllers.values()].some((c) => c.deviceId === parsed.deviceId)) {
+        lspStatusStore.getState().set(parsed.deviceId, {
+          state: "closed",
+          message: `${languageId} 无远程语言服务器支持`,
+        });
+      }
       return;
     }
 
-    // 工作区根：优先当前远程根（同设备），否则文件所在目录
+    // 工作区根：仅当文件位于当前同设备远程根内时使用工作区根，否则回退到文件所在目录
     const root = explorerStore.getState().rootPath;
     let workspaceRoot: string;
     const rootParsed = root ? parseRemoteUri(root) : null;
-    if (rootParsed && rootParsed.deviceId === parsed.deviceId) {
+    if (
+      rootParsed &&
+      rootParsed.deviceId === parsed.deviceId &&
+      isPathWithinRoot(parsed.path, rootParsed.path)
+    ) {
       workspaceRoot = rootParsed.path;
     } else {
       const idx = parsed.path.lastIndexOf("/");
@@ -734,36 +831,79 @@ class LspManager {
     }
 
     const key = this.key(parsed.deviceId, workspaceRoot, languageId);
+    const pendingStart = this.inFlight.get(key);
+    if (pendingStart) {
+      await pendingStart;
+      const readyController = this.controllers.get(key);
+      if (readyController && !model.isDisposed()) {
+        readyController.attachModel(model);
+      }
+      return;
+    }
+
     let controller = this.controllers.get(key);
     if (!controller) {
-      // 找到该设备的活跃会话（远程操作按 device_identity_id 路由）
-      let sessionId: string | null = null;
-      try {
-        const sessions = await sshApi.listSessions();
-        sessionId =
-          sessions.find((s) => s.deviceIdentityId === parsed.deviceId)?.sessionId ?? null;
-      } catch {
-        sessionId = null;
-      }
-      if (!sessionId) {
-        lspStatusStore.getState().set(parsed.deviceId, {
-          state: "closed",
-          message: "设备未连接，语言智能降级",
+      const startGen = this.deviceGen.get(parsed.deviceId) ?? 0;
+      const startJob = (async () => {
+        // 找到该设备的活跃会话（远程操作按 device_identity_id 路由）
+        let sessionId: string | null = null;
+        try {
+          const sessions = await sshApi.listSessions();
+          sessionId =
+            sessions.find((s) => s.deviceIdentityId === parsed.deviceId)?.sessionId ?? null;
+        } catch {
+          sessionId = null;
+        }
+        if ((this.deviceGen.get(parsed.deviceId) ?? 0) !== startGen) {
+          return;
+        }
+        if (!sessionId) {
+          this.syncDeviceStatus(parsed.deviceId);
+          if (!lspStatusStore.getState().statuses[parsed.deviceId]) {
+            lspStatusStore.getState().set(parsed.deviceId, {
+              state: "closed",
+              message: "设备未连接，语言智能降级",
+            });
+          }
+          return;
+        }
+        const created = new RemoteLspController(
+          parsed.deviceId,
+          sessionId,
+          workspaceRoot,
+          languageId,
+          {
+            onStatusChanged: () => this.syncDeviceStatus(parsed.deviceId),
+            onDisposed: () => {
+              if (this.controllers.get(key) === created) {
+                this.controllers.delete(key);
+              }
+              this.syncDeviceStatus(parsed.deviceId);
+            },
+          },
+        );
+        this.controllers.set(key, created);
+        await created.start().catch(() => {
+          if (this.controllers.get(key) === created) {
+            this.controllers.delete(key);
+          }
         });
-        return;
+      })();
+
+      this.inFlight.set(key, startJob);
+      try {
+        await startJob;
+      } finally {
+        if (this.inFlight.get(key) === startJob) {
+          this.inFlight.delete(key);
+        }
       }
-      controller = new RemoteLspController(
-        parsed.deviceId,
-        sessionId,
-        workspaceRoot,
-        languageId,
-      );
-      this.controllers.set(key, controller);
-      await controller.start().catch(() => {
-        this.controllers.delete(key);
-      });
+      controller = this.controllers.get(key);
     }
-    controller.attachModel(model);
+
+    if (controller && !model.isDisposed()) {
+      controller.attachModel(model);
+    }
   }
 
   /** 按当前「代码报错显示」开关刷新或清空所有远程 LSP 诊断标记 */

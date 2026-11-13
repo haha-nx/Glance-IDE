@@ -9,8 +9,11 @@ interface GitStoreState {
   graphAllBranches: boolean;
   setGraphAllBranches(all: boolean): void;
   refresh(root: string | null, silent?: boolean): Promise<GitOverviewDto | null>;
+  clearError(): void;
   clear(): void;
 }
+
+let refreshGen = 0;
 
 export const gitStore = create<GitStoreState>()((set, get) => ({
   overview: null,
@@ -28,6 +31,7 @@ export const gitStore = create<GitStoreState>()((set, get) => ({
   },
 
   refresh: async (root, silent = false) => {
+    const gen = ++refreshGen;
     if (!root) {
       set({ overview: null, loading: false, error: null, lastRoot: null });
       return null;
@@ -35,9 +39,11 @@ export const gitStore = create<GitStoreState>()((set, get) => ({
     if (!silent) set({ loading: true, error: null });
     try {
       const data = await gitApi.overview(root, get().graphAllBranches);
+      if (gen !== refreshGen) return null;
       set({ overview: data, loading: false, error: null, lastRoot: root });
       return data;
     } catch (e) {
+      if (gen !== refreshGen) return null;
       const msg = e instanceof Error ? e.message : String(e);
       set({
         loading: false,
@@ -48,5 +54,10 @@ export const gitStore = create<GitStoreState>()((set, get) => ({
     }
   },
 
-  clear: () => set({ overview: null, loading: false, error: null, lastRoot: null }),
+  clearError: () => set({ error: null }),
+
+  clear: () => {
+    refreshGen += 1;
+    set({ overview: null, loading: false, error: null, lastRoot: null });
+  },
 }));

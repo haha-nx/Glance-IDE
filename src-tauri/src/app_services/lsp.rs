@@ -6,16 +6,17 @@
 //!   决策记录见 docs/Handoff.md「M6 LSP Spike 结论」。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use russh::ChannelMsg;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
 
 use crate::app_services::ssh_sessions::SessionManager;
-use crate::app_services::terminal::exec_capture;
+use crate::app_services::terminal::{exec_capture, sh_quote};
 
 const DETECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
@@ -106,19 +107,26 @@ pub async fn detect_project(
     workspace_root: &str,
 ) -> Result<ProjectInfo, String> {
     let root = workspace_root.trim().trim_end_matches('/').to_string();
+    let q_src = sh_quote(&format!("{root}/src"));
+    let q_cmake = sh_quote(&format!("{root}/CMakeLists.txt"));
+    let q_pkg = sh_quote(&format!("{root}/package.xml"));
+    let q_pyproject = sh_quote(&format!("{root}/pyproject.toml"));
+    let q_setup = sh_quote(&format!("{root}/setup.py"));
+    let q_build = sh_quote(&format!("{root}/build"));
+    let q_compdb = sh_quote(&format!("{root}/compile_commands.json"));
     let mut details = Vec::new();
 
     let (probe, _, code) = exec_capture(
         sessions,
         session_id,
         &format!(
-            "test -d '{root}/src' && ls '{root}/src' | head -50 || true; \
-             test -f '{root}/CMakeLists.txt' && echo CMAKE_ROOT || true; \
-             test -f '{root}/package.xml' && echo ROS_ROOT || true; \
-             test -f '{root}/pyproject.toml' && echo PYPROJECT || true; \
-             test -f '{root}/setup.py' && echo SETUP || true; \
-             find '{root}/build' -maxdepth 2 -name compile_commands.json 2>/dev/null | head -3; \
-             test -f '{root}/compile_commands.json' && echo '{root}/compile_commands.json'"
+            "test -d {q_src} && ls {q_src} | head -50 || true; \
+             test -f {q_cmake} && echo CMAKE_ROOT || true; \
+             test -f {q_pkg} && echo ROS_ROOT || true; \
+             test -f {q_pyproject} && echo PYPROJECT || true; \
+             test -f {q_setup} && echo SETUP || true; \
+             find {q_build} -maxdepth 2 -name compile_commands.json 2>/dev/null | head -3; \
+             test -f {q_compdb} && printf '%s\\n' {q_compdb}"
         ),
         DETECT_TIMEOUT,
     )
@@ -157,10 +165,11 @@ pub async fn detect_project(
 
     // compile_commands 指纹（缓存键：device+workspace+clangd_version+compile_db_hash）
     let compile_db_fingerprint = if let Some(path) = compile_db_path {
+        let q_path = sh_quote(&path);
         let (hash, _, hcode) = exec_capture(
             sessions,
             session_id,
-            &format!("sha256sum '{path}' | cut -c1-16"),
+            &format!("sha256sum {q_path} | cut -c1-16"),
             DETECT_TIMEOUT,
         )
         .await
@@ -366,6 +375,8 @@ struct LspChannelEntry {
     #[allow(dead_code)]
     pub server: String,
     commands: mpsc::Sender<LspCommand>,
+    close_flag: Arc<AtomicBool>,
+    close_notify: Arc<Notify>,
 }
 
 /// LSP 通道注册表（M6）：lsp_id → 通道；会话断开时统一回收
@@ -385,7 +396,16 @@ impl LspRegistry {
 
     pub(crate) fn send(&self, lsp_id: &Uuid, cmd: LspCommand) -> bool {
         match self.channels.lock().unwrap().get(lsp_id) {
-            Some(entry) => entry.commands.try_send(cmd).is_ok(),
+            Some(entry) => {
+                if matches!(cmd, LspCommand::Close) {
+                    entry.close_flag.store(true, Ordering::Release);
+                    entry.close_notify.notify_waiters();
+                    let _ = entry.commands.try_send(cmd);
+                    true
+                } else {
+                    entry.commands.try_send(cmd).is_ok()
+                }
+            }
             None => false,
         }
     }
@@ -456,6 +476,8 @@ pub async fn open_lsp(
 
     let lsp_id = Uuid::new_v4();
     let (tx, mut rx) = mpsc::channel::<LspCommand>(64);
+    let close_flag = Arc::new(AtomicBool::new(false));
+    let close_notify = Arc::new(Notify::new());
     registry.insert(LspChannelEntry {
         lsp_id,
         session_id,
@@ -464,6 +486,8 @@ pub async fn open_lsp(
         language: language.to_string(),
         server: server.to_string(),
         commands: tx,
+        close_flag: close_flag.clone(),
+        close_notify: close_notify.clone(),
     });
 
     // 读循环：stdout 帧 → JSON 消息；stderr → 文本事件
@@ -493,22 +517,37 @@ pub async fn open_lsp(
         });
     }
 
-    // 命令循环：写帧 / 关闭
+    // 命令循环：写帧 / 关闭（Close 走 close_flag/notify 防背压丢包）
     {
         let registry = registry.clone();
         let id = lsp_id;
         tauri::async_runtime::spawn(async move {
-            while let Some(cmd) = rx.recv().await {
-                match cmd {
-                    LspCommand::Write(bytes) => {
-                        if write_half.data_bytes(bytes).await.is_err() {
-                            break;
-                        }
-                    }
-                    LspCommand::Close => {
+            loop {
+                if close_flag.load(Ordering::Acquire) {
+                    let _ = write_half.eof().await;
+                    let _ = write_half.close().await;
+                    break;
+                }
+                tokio::select! {
+                    _ = close_notify.notified() => {
                         let _ = write_half.eof().await;
                         let _ = write_half.close().await;
                         break;
+                    }
+                    maybe_cmd = rx.recv() => {
+                        let Some(cmd) = maybe_cmd else { break; };
+                        match cmd {
+                            LspCommand::Write(bytes) => {
+                                if write_half.data_bytes(bytes).await.is_err() {
+                                    break;
+                                }
+                            }
+                            LspCommand::Close => {
+                                let _ = write_half.eof().await;
+                                let _ = write_half.close().await;
+                                break;
+                            }
+                        }
                     }
                 }
             }

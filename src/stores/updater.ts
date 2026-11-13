@@ -103,6 +103,7 @@ export const updaterStore = create<UpdaterState>()((set, get) => ({
         res.assetName,
         res.assetSize,
         (progress) => set({ downloadProgress: progress }),
+        res.assetDigest ?? null,
       );
       set({ downloading: false, downloadResult: dl });
       return dl;

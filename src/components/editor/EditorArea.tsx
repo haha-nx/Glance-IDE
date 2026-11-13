@@ -9,7 +9,6 @@ import { TabBar } from "./TabBar";
 import { MonacoHost } from "./MonacoHost";
 import { GitDiffView } from "./GitDiffView";
 import { MarkdownWysiwyg } from "../markdown/MarkdownWysiwyg";
-import { SettingsModal } from "../common/SettingsModal";
 import { IS_MAC } from "../../lib/platform";
 
 /**
@@ -22,7 +21,6 @@ export function EditorArea() {
   const layout = tabsStore((s) => s.layout);
   const drag = tabDragStore((s) => s.drag);
   const [weights, setWeights] = useState<Record<string, number>>({});
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // 原生菜单事件：按当前窗口绑定，避免多开窗口互相触发
   useEffect(() => {
@@ -51,11 +49,6 @@ export function EditorArea() {
         if (typeof picked === "string" && picked) {
           await tabsStore.getState().openFileByPath(picked);
         }
-      })
-      .then(bind);
-    void curWin
-      .listen("menu:settings", () => {
-        setSettingsOpen(true);
       })
       .then(bind);
     return () => {
@@ -137,8 +130,6 @@ export function EditorArea() {
           {drag.label}
         </div>
       )}
-
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

@@ -83,22 +83,49 @@ fn resolve_menu_target_window(app: &tauri::AppHandle) -> Option<String> {
     app.webview_windows().keys().next().cloned()
 }
 
-/// 在退出或更新重启前清理活跃传输、终端、LSP 与 SSH 会话。
+/// 在退出或更新重启前清理活跃传输、终端、LSP 与 SSH 会话（异步等待，设总超时避免卡死退出）。
+pub async fn shutdown_runtime_sessions_async(state: &AppState) {
+    state.transfers.cancel_all();
+    app_services::terminal::close_all(&state.terminals).await;
+    app_services::lsp::close_all(&state.lsp);
+    let entries = state.sessions.list();
+    if entries.is_empty() {
+        return;
+    }
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(1500), async move {
+        let mut set = tokio::task::JoinSet::new();
+        for entry in entries {
+            let sid = entry.session_id;
+            let mgr = state.sessions.clone();
+            set.spawn(async move {
+                let _ = mgr.disconnect(&sid).await;
+            });
+        }
+        while set.join_next().await.is_some() {}
+    })
+    .await;
+}
+
+/// 同步事件上下文下的会话回收（如最后一个窗口 Destroyed 事件）
 pub fn shutdown_runtime_sessions(state: &AppState) {
     state.transfers.cancel_all();
     let terminals = state.terminals.clone();
+    let sessions = state.sessions.clone();
+    app_services::lsp::close_all(&state.lsp);
     tauri::async_runtime::spawn(async move {
         app_services::terminal::close_all(&terminals).await;
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(1500), async move {
+            let mut set = tokio::task::JoinSet::new();
+            for entry in sessions.list() {
+                let mgr = sessions.clone();
+                set.spawn(async move {
+                    let _ = mgr.disconnect(&entry.session_id).await;
+                });
+            }
+            while set.join_next().await.is_some() {}
+        })
+        .await;
     });
-    app_services::lsp::close_all(&state.lsp);
-    for entry in state.sessions.list() {
-        tauri::async_runtime::spawn(async move {
-            let handle = entry.handle.lock().await;
-            let _ = handle
-                .disconnect(russh::Disconnect::ByApplication, "app exit", "en")
-                .await;
-        });
-    }
 }
 
 /// 发现服务状态（独立 manage，避免污染 AppState）
@@ -444,8 +471,13 @@ pub fn run() {
                                 *last = None;
                             }
                         }
-                        // 主窗口关闭时回收全部 SSH 会话（生命周期管理）
-                        if label == "main" {
+                        // 仅在最后一个窗口销毁时回收全部 SSH/终端/LSP 会话（先关主窗口不误杀副窗口）
+                        let is_last_window = window
+                            .app_handle()
+                            .webview_windows()
+                            .keys()
+                            .all(|k| k == &label);
+                        if is_last_window {
                             shutdown_runtime_sessions(&state);
                         }
                     }

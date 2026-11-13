@@ -168,10 +168,23 @@ export function GitPanel() {
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const commitMenuRef = useRef<HTMLDivElement>(null);
   const branchInputRef = useRef<HTMLInputElement>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
 
   const activeRepoRoot = overview?.repoRootUri || rootPath;
   const displayError = actionError ?? storeError;
   const totalPendingCount = (overview?.staged.length ?? 0) + (overview?.changes.length ?? 0);
+
+  useEffect(() => {
+    setActionError(null);
+    setNotice(null);
+    gitStore.getState().clearError();
+  }, [rootPath]);
+
+  useEffect(() => {
+    return () => {
+      dragCleanupRef.current?.();
+    };
+  }, []);
 
   const refresh = useCallback(
     async (silent = false) => {
@@ -220,17 +233,24 @@ export function GitPanel() {
       setSplitRatio(latestRatio);
     };
 
-    const onUp = () => {
+    const cleanup = () => {
       setDraggingSplit(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      dragCleanupRef.current = null;
+    };
+
+    const onUp = () => {
       try {
         localStorage.setItem(SCM_SPLIT_STORAGE_KEY, String(latestRatio));
       } catch {
         // 忽略本地存储写入异常
       }
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      cleanup();
     };
 
+    dragCleanupRef.current?.();
+    dragCleanupRef.current = cleanup;
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }, [splitRatio]);
@@ -584,7 +604,13 @@ export function GitPanel() {
       {displayError && (
         <div className="mx-2 mt-2 flex shrink-0 items-start justify-between gap-2 rounded border border-red-800/60 bg-red-950/30 px-2.5 py-1.5 text-[11px] text-red-300 select-text">
           <span className="break-all">{displayError}</span>
-          <button onClick={() => setActionError(null)} className="shrink-0 text-red-400 hover:text-red-200">
+          <button
+            onClick={() => {
+              setActionError(null);
+              gitStore.getState().clearError();
+            }}
+            className="shrink-0 text-red-400 hover:text-red-200"
+          >
             ✕
           </button>
         </div>

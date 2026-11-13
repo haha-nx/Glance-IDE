@@ -6,14 +6,20 @@
 //! - 支持远程 SSH PTY、本机终端（PowerShell/Bash）以及 WSL 终端
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use russh::ChannelMsg;
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use uuid::Uuid;
 
 use crate::app_services::ssh_sessions::SessionManager;
+
+/// 构造 POSIX 单引号安全字面量（防远端 Shell 注入）
+pub fn sh_quote(raw: &str) -> String {
+    format!("'{}'", raw.replace('\'', r"'\''"))
+}
 
 /// 事件汇：终端/任务输出统一走此回调（命令层用 Tauri Channel 实现，测试用闭包）
 pub type EventSink = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
@@ -27,7 +33,8 @@ pub enum TerminalCommand {
 
 struct TerminalEntry {
     commands: mpsc::Sender<TerminalCommand>,
-    #[allow(dead_code)]
+    close_flag: Arc<AtomicBool>,
+    close_notify: Arc<Notify>,
     session_id: Uuid,
     /// 关联设备（错误跳转解析远程路径用）
     device_identity_id: Uuid,
@@ -51,11 +58,26 @@ impl TerminalRegistry {
         let guard = self.terminals.lock().unwrap();
         match guard.get(channel_id) {
             Some(entry) => {
+                if matches!(cmd, TerminalCommand::Close) {
+                    // Close 不依赖有限容量队列，防止高吞吐背压丢包导致进程泄漏
+                    entry.close_flag.store(true, Ordering::Release);
+                    entry.close_notify.notify_waiters();
+                }
                 let _ = entry.commands.try_send(cmd);
                 true
             }
             None => false,
         }
+    }
+
+    pub fn ids_by_session(&self, session_id: &Uuid) -> Vec<Uuid> {
+        self.terminals
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, e)| &e.session_id == session_id)
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     pub fn device_of(&self, channel_id: &Uuid) -> Option<Uuid> {
@@ -123,9 +145,17 @@ pub async fn open_pty(
 
     let channel_id = Uuid::new_v4();
     let (tx, mut rx) = mpsc::channel::<TerminalCommand>(64);
+    let close_flag = Arc::new(AtomicBool::new(false));
+    let close_notify = Arc::new(Notify::new());
     registry.insert(
         channel_id,
-        TerminalEntry { commands: tx, session_id, device_identity_id },
+        TerminalEntry {
+            commands: tx,
+            close_flag: close_flag.clone(),
+            close_notify: close_notify.clone(),
+            session_id,
+            device_identity_id,
+        },
     );
 
     // 读循环：PTY 数据 → 前端 Channel（wait 驱动）
@@ -150,25 +180,40 @@ pub async fn open_pty(
         });
     }
 
-    // 命令循环：写 / resize / 关闭
+    // 命令循环：写 / resize / 关闭（Close 走 close_flag/notify 防队列满丢失）
     {
         let registry = registry.clone();
         let cid = channel_id;
         tauri::async_runtime::spawn(async move {
-            while let Some(cmd) = rx.recv().await {
-                match cmd {
-                    TerminalCommand::Write(data) => {
-                        if write_half.data_bytes(data).await.is_err() {
-                            break;
-                        }
-                    }
-                    TerminalCommand::Resize { cols, rows } => {
-                        let _ = write_half.window_change(cols, rows, 0, 0).await;
-                    }
-                    TerminalCommand::Close => {
+            loop {
+                if close_flag.load(Ordering::Acquire) {
+                    let _ = write_half.eof().await;
+                    let _ = write_half.close().await;
+                    break;
+                }
+                tokio::select! {
+                    _ = close_notify.notified() => {
                         let _ = write_half.eof().await;
                         let _ = write_half.close().await;
                         break;
+                    }
+                    maybe_cmd = rx.recv() => {
+                        let Some(cmd) = maybe_cmd else { break; };
+                        match cmd {
+                            TerminalCommand::Write(data) => {
+                                if write_half.data_bytes(data).await.is_err() {
+                                    break;
+                                }
+                            }
+                            TerminalCommand::Resize { cols, rows } => {
+                                let _ = write_half.window_change(cols, rows, 0, 0).await;
+                            }
+                            TerminalCommand::Close => {
+                                let _ = write_half.eof().await;
+                                let _ = write_half.close().await;
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -191,7 +236,8 @@ async fn open_process_terminal(
     cmd.args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
 
     #[cfg(windows)]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -212,17 +258,21 @@ async fn open_process_terminal(
 
     let channel_id = Uuid::new_v4();
     let (tx, mut rx) = mpsc::channel::<TerminalCommand>(64);
+    let close_flag = Arc::new(AtomicBool::new(false));
+    let close_notify = Arc::new(Notify::new());
     registry.insert(
         channel_id,
         TerminalEntry {
             commands: tx,
+            close_flag: close_flag.clone(),
+            close_notify: close_notify.clone(),
             session_id: Uuid::nil(),
             device_identity_id: Uuid::nil(),
         },
     );
 
     // Stdout 读取
-    {
+    let stdout_task = {
         let output = output.clone();
         tauri::async_runtime::spawn(async move {
             use tokio::io::AsyncReadExt;
@@ -236,11 +286,11 @@ async fn open_process_terminal(
                     Err(_) => break,
                 }
             }
-        });
-    }
+        })
+    };
 
     // Stderr 读取
-    {
+    let stderr_task = {
         let output = output.clone();
         tauri::async_runtime::spawn(async move {
             use tokio::io::AsyncReadExt;
@@ -254,35 +304,62 @@ async fn open_process_terminal(
                     Err(_) => break,
                 }
             }
-        });
-    }
+        })
+    };
 
-    // Stdin 写入与生命周期
+    // Stdin 写入与生命周期：同时监控 child.wait() 与 close_notify，避免进程退出后写入循环永驻挂死
     {
         let registry = registry.clone();
         let cid = channel_id;
         let output = output.clone();
         tauri::async_runtime::spawn(async move {
             use tokio::io::AsyncWriteExt;
-            while let Some(cmd) = rx.recv().await {
-                match cmd {
-                    TerminalCommand::Write(mut data) => {
-                        #[cfg(windows)]
-                        if data == b"\r" {
-                            data = b"\r\n".to_vec();
-                        }
-                        if stdin.write_all(&data).await.is_err() {
-                            break;
-                        }
-                        let _ = stdin.flush().await;
-                    }
-                    TerminalCommand::Resize { .. } => {}
-                    TerminalCommand::Close => {
+            loop {
+                if close_flag.load(Ordering::Acquire) {
+                    let _ = child.kill().await;
+                    break;
+                }
+                tokio::select! {
+                    _ = close_notify.notified() => {
                         let _ = child.kill().await;
                         break;
                     }
+                    _ = child.wait() => {
+                        // 子进程自然退出，等待输出管道冲刷后结束会话
+                        break;
+                    }
+                    maybe_cmd = rx.recv() => {
+                        let Some(cmd) = maybe_cmd else {
+                            let _ = child.kill().await;
+                            break;
+                        };
+                        match cmd {
+                            #[allow(unused_mut)]
+                            TerminalCommand::Write(mut data) => {
+                                #[cfg(windows)]
+                                if data == b"\r" {
+                                    data = b"\r\n".to_vec();
+                                }
+                                if stdin.write_all(&data).await.is_err() {
+                                    break;
+                                }
+                                let _ = stdin.flush().await;
+                            }
+                            TerminalCommand::Resize { .. } => {}
+                            TerminalCommand::Close => {
+                                let _ = child.kill().await;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
+            drop(stdin);
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(250), async {
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+            })
+            .await;
             registry.remove(&cid);
             output(serde_json::json!({ "type": "closed" }));
         });
@@ -396,10 +473,14 @@ async fn open_unix_pty_terminal(
 
     let channel_id = Uuid::new_v4();
     let (tx, mut rx) = mpsc::channel::<TerminalCommand>(64);
+    let close_flag = Arc::new(AtomicBool::new(false));
+    let close_notify = Arc::new(Notify::new());
     registry.insert(
         channel_id,
         TerminalEntry {
             commands: tx,
+            close_flag: close_flag.clone(),
+            close_notify: close_notify.clone(),
             session_id: Uuid::nil(),
             device_identity_id: Uuid::nil(),
         },
@@ -436,27 +517,46 @@ async fn open_unix_pty_terminal(
         tauri::async_runtime::spawn(async move {
             let mut writer = master_writer;
             let mut master_raw = -1i32;
-            while let Some(cmd) = rx.recv().await {
-                match cmd {
-                    TerminalCommand::Write(data) => {
-                        if writer.write_all(&data).await.is_err() {
-                            break;
-                        }
-                        let _ = writer.flush().await;
-                    }
-                    TerminalCommand::Resize { cols, rows } => {
-                        if master_raw < 0 {
-                            master_raw = std::os::fd::AsRawFd::as_raw_fd(&writer);
-                        }
-                        resize_pty_fd(master_raw, cols, rows);
-                    }
-                    TerminalCommand::Close => {
-                        // 先给 shell 一个退出机会，再兜底 kill
+            loop {
+                if close_flag.load(Ordering::Acquire) {
+                    let _ = writer.write_all(b"exit\n").await;
+                    let _ = writer.flush().await;
+                    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                    let _ = child.start_kill();
+                    break;
+                }
+                tokio::select! {
+                    _ = close_notify.notified() => {
                         let _ = writer.write_all(b"exit\n").await;
                         let _ = writer.flush().await;
                         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
                         let _ = child.start_kill();
                         break;
+                    }
+                    maybe_cmd = rx.recv() => {
+                        let Some(cmd) = maybe_cmd else { break; };
+                        match cmd {
+                            TerminalCommand::Write(data) => {
+                                if writer.write_all(&data).await.is_err() {
+                                    break;
+                                }
+                                let _ = writer.flush().await;
+                            }
+                            TerminalCommand::Resize { cols, rows } => {
+                                if master_raw < 0 {
+                                    master_raw = std::os::fd::AsRawFd::as_raw_fd(&writer);
+                                }
+                                resize_pty_fd(master_raw, cols, rows);
+                            }
+                            TerminalCommand::Close => {
+                                // 先给 shell 一个退出机会，再兜底 kill
+                                let _ = writer.write_all(b"exit\n").await;
+                                let _ = writer.flush().await;
+                                tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                                let _ = child.start_kill();
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -529,8 +629,8 @@ pub async fn run_exec(
     let cd = if cwd.trim().is_empty() {
         String::new()
     } else {
-        let safe = cwd.trim().replace('\'', r"'\''");
-        format!("cd '{safe}' || {{ echo 'cd 失败: {cwd}'; exit 127; }}\n")
+        let safe = sh_quote(cwd.trim());
+        format!("cd {safe} || {{ printf 'cd 失败: %s\\n' {safe}; exit 127; }}\n")
     };
     let full_command = format!("{cd}{command}");
 
@@ -595,6 +695,14 @@ pub async fn run_exec(
     let code = exit_code.unwrap_or(-1);
     output(serde_json::json!({ "type": "exit", "code": code }));
     Ok(code)
+}
+
+/// 会话断开时关闭关联终端通道
+pub fn close_by_session(registry: &TerminalRegistry, session_id: &Uuid) {
+    for cid in registry.ids_by_session(session_id) {
+        registry.send(&cid, TerminalCommand::Close);
+        registry.remove_pub(&cid);
+    }
 }
 
 /// 断开时关闭全部终端

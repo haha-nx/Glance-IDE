@@ -13,6 +13,7 @@ export interface UpdateCheckResultDto {
   assetName: string | null;
   assetUrl: string | null;
   assetSize: number | null;
+  assetDigest?: string | null;
   platform: string;
   installMode: InstallMode;
 }
@@ -41,6 +42,7 @@ export const updaterApi = {
     fileName: string,
     expectedSize?: number | null,
     onProgress?: (ev: UpdateDownloadProgressDto) => void,
+    expectedDigest?: string | null,
   ): Promise<DownloadInstallerResultDto> {
     const channel = new Channel<UpdateDownloadProgressDto>();
     if (onProgress) {
@@ -50,6 +52,7 @@ export const updaterApi = {
       url,
       fileName,
       expectedSize: expectedSize ?? null,
+      expectedDigest: expectedDigest ?? null,
       onEvent: channel,
     });
   },

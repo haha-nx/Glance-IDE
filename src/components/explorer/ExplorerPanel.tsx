@@ -191,31 +191,50 @@ export function ExplorerPanel() {
   }
 
   async function submitDialog() {
-    if (!dialog) return;
+    if (!dialog || busy) return;
+    const trimmed = input.trim();
+    if (dialog.kind !== "delete") {
+      if (
+        !trimmed ||
+        trimmed === "." ||
+        trimmed === ".." ||
+        trimmed.includes("/") ||
+        trimmed.includes("\\") ||
+        trimmed.includes("\0")
+      ) {
+        alert("名称无效：不能为空、'.' / '..'，也不能包含 '/'、'\\' 或空字符。");
+        return;
+      }
+    }
     setBusy(true);
     try {
       if (dialog.kind === "newFile") {
-        const path = joinChildPath(dialog.parent, input);
+        const path = joinChildPath(dialog.parent, trimmed);
         await filesApi.createFile(path);
         await explorerStore.getState().refresh(dialog.parent);
         await tabsStore.getState().openFile({
-          name: input,
+          name: trimmed,
           path,
           kind: "file",
           size: 0,
           modifiedMs: Date.now(),
         });
       } else if (dialog.kind === "newFolder") {
-        await filesApi.createDir(joinChildPath(dialog.parent, input));
+        await filesApi.createDir(joinChildPath(dialog.parent, trimmed));
         await explorerStore.getState().refresh(dialog.parent);
       } else if (dialog.kind === "rename") {
         const parent = explorerStore.getState().parentOf(dialog.path);
         if (parent) {
-          await filesApi.renameEntry(dialog.path, joinChildPath(parent, input));
-          await explorerStore.getState().refresh(parent);
+          const newPath = joinChildPath(parent, trimmed);
+          if (newPath !== dialog.path) {
+            await filesApi.renameEntry(dialog.path, newPath);
+            tabsStore.getState().handlePathRenamed(dialog.path, newPath);
+            await explorerStore.getState().refresh(parent);
+          }
         }
       } else if (dialog.kind === "delete") {
         await filesApi.deleteEntry(dialog.path, dialog.isDir);
+        tabsStore.getState().handlePathDeleted(dialog.path, dialog.isDir);
         const parent = explorerStore.getState().parentOf(dialog.path);
         if (parent) await explorerStore.getState().refresh(parent);
       }
@@ -429,7 +448,9 @@ export function ExplorerPanel() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void submitDialog();
+                if (e.key === "Enter" && !busy && input.trim().length > 0) {
+                  void submitDialog();
+                }
               }}
               placeholder="输入名称"
               className="w-full rounded border border-zinc-600 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-sky-600"

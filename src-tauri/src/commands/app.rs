@@ -17,21 +17,28 @@ pub fn get_app_info(app: tauri::AppHandle) -> AppInfo {
     }
 }
 
-/// 优雅退出应用，彻底解决 release 包中窗口权限或环境异常导致的无法关闭问题
+/// 优雅退出应用：先清理活跃会话再退出，彻底解决 release 包无法关闭或会话残余问题
 #[tauri::command]
-pub fn exit_app(app: tauri::AppHandle) {
+pub async fn exit_app(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<(), String> {
+    crate::shutdown_runtime_sessions_async(&state).await;
     app.exit(0);
+    Ok(())
 }
 
-/// 关闭当前窗口。如果这是最后一个窗口，则彻底退出应用；若还有其他窗口，仅销毁当前窗口
+/// 关闭当前窗口。如果这是最后一个窗口，则先回收会话再彻底退出应用；若还有其他窗口，仅销毁当前窗口
 #[tauri::command]
 pub async fn close_window(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
+    state: tauri::State<'_, crate::AppState>,
 ) -> Result<(), String> {
     use tauri::Manager;
     let count = app.webview_windows().len();
     if count <= 1 {
+        crate::shutdown_runtime_sessions_async(&state).await;
         app.exit(0);
     } else {
         window.destroy().map_err(|e| e.to_string())?;

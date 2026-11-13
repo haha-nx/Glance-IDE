@@ -414,7 +414,7 @@ export function RemotePanel() {
         )}
       </div>
 
-      {dialog && (
+      {(dialog?.kind === "create" || dialog?.kind === "edit") && (
         <ProfileDialog
           existing={dialog.kind === "edit" ? dialog.profile : null}
           prefill={dialog.kind === "create" ? prefill : null}

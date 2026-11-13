@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { gitApi, type GitCommitDto, type GitCommitFileDto, type GitRefDto } from "../../services/git";
 import { tabsStore } from "../../stores/tabs";
 
@@ -407,6 +407,8 @@ export function CommitGraph({
   const [filesByHash, setFilesByHash] = useState<Record<string, GitCommitFileDto[]>>({});
   const [errorByHash, setErrorByHash] = useState<Record<string, string>>({});
   const [loadingHash, setLoadingHash] = useState<string | null>(null);
+  const repoRootRef = useRef(repoRoot);
+  repoRootRef.current = repoRoot;
 
   // 切换仓库时重置展开项与缓存；提交哈希内容不可变，避免后台刷新 commits 引用时误清已加载详情
   useEffect(() => {
@@ -427,6 +429,7 @@ export function CommitGraph({
   const svgWidth = Math.max(24, PAD_LEFT + Math.max(0, maxCols - 1) * laneSpacing + 12);
 
   const loadCommitFiles = async (hash: string) => {
+    const targetRoot = repoRootRef.current;
     setLoadingHash(hash);
     setErrorByHash((prev) => {
       if (!(hash in prev)) return prev;
@@ -435,13 +438,17 @@ export function CommitGraph({
       return next;
     });
     try {
-      const files = await gitApi.commitFiles(repoRoot, hash);
+      const files = await gitApi.commitFiles(targetRoot, hash);
+      if (repoRootRef.current !== targetRoot) return;
       setFilesByHash((prev) => ({ ...prev, [hash]: files }));
     } catch (e) {
+      if (repoRootRef.current !== targetRoot) return;
       const msg = e instanceof Error ? e.message : String(e);
       setErrorByHash((prev) => ({ ...prev, [hash]: msg || "无法加载提交文件变更" }));
     } finally {
-      setLoadingHash((curr) => (curr === hash ? null : curr));
+      if (repoRootRef.current === targetRoot) {
+        setLoadingHash((curr) => (curr === hash ? null : curr));
+      }
     }
   };
 

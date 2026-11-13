@@ -14,7 +14,7 @@ import { tabsStore } from "../../stores/tabs";
 import { explorerStore } from "../../stores/explorer";
 import { settingsStore, type AppTheme } from "../../stores/settings";
 import { parseProblems, resolveProblemPath, type Problem } from "../../lib/problems";
-import { isBlankWindow } from "../../lib/windowState";
+import { isPrimaryWindow } from "../../lib/windowState";
 import { IS_MAC } from "../../lib/platform";
 import type { SessionDto } from "../../types/ssh";
 import type { WslDistroDto } from "../../types/wsl";
@@ -77,6 +77,8 @@ interface TermTabItem {
   channelId: string;
   /** SSH 终端关联的设备身份，用于会话掉线时精准回收对应标签 */
   deviceIdentityId?: string;
+  /** 用户是否已在该终端输入过内容，防止自动连接替换掉正在使用的本机终端 */
+  hasInput: boolean;
   term: XTerm;
   fit: FitAddon;
   container: HTMLDivElement;
@@ -99,12 +101,20 @@ interface TermDragState {
 }
 
 interface TerminalPanelProps {
+  visible?: boolean;
   onClose: () => void;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
+  onTerminalCountChange?: (count: number) => void;
 }
 
-export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: TerminalPanelProps) {
+export function TerminalPanel({
+  visible = true,
+  onClose,
+  isMaximized,
+  onToggleMaximize,
+  onTerminalCountChange,
+}: TerminalPanelProps) {
   const [tab, setTab] = useState<"terminal" | "tasks" | "problems">("terminal");
   const [sessions, setSessions] = useState<SessionDto[]>([]);
   const [wslDistros, setWslDistros] = useState<WslDistroDto[]>([]);
@@ -130,6 +140,15 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const termsMapRef = useRef<Map<string, TermTabItem>>(new Map());
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  const openingAutoRef = useRef(false);
+  const initialSshWaitDoneRef = useRef(false);
+  const dragStateRef = useRef<TermDragState | null>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  const onTerminalCountChangeRef = useRef(onTerminalCountChange);
+  onTerminalCountChangeRef.current = onTerminalCountChange;
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const fontSize = settingsStore((s) => s.fontSize);
   const theme = settingsStore((s) => s.theme);
 
@@ -152,7 +171,10 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       wslApi.listDistros().then(setWslDistros).catch(() => setWslDistros([]));
     }
 
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      dragCleanupRef.current?.();
       if (syncTimerRef.current) {
         clearTimeout(syncTimerRef.current);
         syncTimerRef.current = null;
@@ -160,8 +182,10 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       for (const item of termsMapRef.current.values()) {
         void terminalApi.close(item.channelId).catch(() => {});
         item.term.dispose();
+        item.container.remove();
       }
       termsMapRef.current.clear();
+      onTerminalCountChangeRef.current?.(0);
     };
   }, []);
 
@@ -175,6 +199,8 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       deviceIdentityId?: string,
     ) => {
       const { Terminal } = await import("@xterm/xterm");
+      if (!mountedRef.current) return;
+
       const { fontSize: curFontSize, theme: curTheme } = settingsStore.getState();
       const term = new Terminal({
         fontFamily: '"SF Mono", Menlo, Consolas, monospace',
@@ -192,20 +218,48 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
 
       const id = `term-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       let pendingSyncUntil = 0;
-      const info = await openFn((e) => {
-        if (e.type === "data" || e.type === "stdout" || e.type === "stderr") {
-          term.write(base64ToBytes(e.bytes));
-          if (Date.now() < pendingSyncUntil) {
-            scheduleExplorerSync(450);
+      let info: { channelId: string };
+      try {
+        info = await openFn((e) => {
+          if (e.type === "data" || e.type === "stdout" || e.type === "stderr") {
+            term.write(base64ToBytes(e.bytes));
+            if (Date.now() < pendingSyncUntil) {
+              scheduleExplorerSync(450);
+            }
+          } else if (e.type === "closed") {
+            term.writeln("\r\n[终端进程已结束]");
+            pendingSyncUntil = 0;
+            scheduleExplorerSync(300);
           }
-        } else if (e.type === "closed") {
-          term.writeln("\r\n[终端进程已结束]");
-          pendingSyncUntil = 0;
-          scheduleExplorerSync(300);
-        }
-      });
+        });
+      } catch (err) {
+        term.dispose();
+        div.remove();
+        console.warn("打开终端失败", err);
+        return;
+      }
+
+      if (!mountedRef.current) {
+        void terminalApi.close(info.channelId).catch(() => {});
+        term.dispose();
+        div.remove();
+        return;
+      }
+
+      const item: TermTabItem = {
+        id,
+        title,
+        type,
+        channelId: info.channelId,
+        deviceIdentityId,
+        hasInput: false,
+        term,
+        fit,
+        container: div,
+      };
 
       term.onData((data) => {
+        item.hasInput = true;
         void terminalApi.write(info.channelId, data);
         // 仅在提交命令（回车/换行）后计划刷新，避免普通按键期间频繁请求远端 SFTP
         if (data.includes("\r") || data.includes("\n")) {
@@ -214,19 +268,9 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
         }
       });
 
-      const item: TermTabItem = {
-        id,
-        title,
-        type,
-        channelId: info.channelId,
-        deviceIdentityId,
-        term,
-        fit,
-        container: div,
-      };
-
       termsMapRef.current.set(id, item);
       setTerms([...termsMapRef.current.values()]);
+      onTerminalCountChangeRef.current?.(termsMapRef.current.size);
 
       // 将新建的终端添加到指定窗格（或当前活动窗格）
       setPanes((prev) => {
@@ -256,6 +300,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       if (targetPaneId) setActivePaneId(targetPaneId);
 
       requestAnimationFrame(() => {
+        if (!mountedRef.current || !termsMapRef.current.has(id)) return;
         try {
           fit.fit();
         } catch {}
@@ -269,7 +314,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   // 打开本机终端
   const openLocalTerminal = useCallback(
     (targetPaneId?: string) => {
-      void attachTerminal("本机终端", "local", async (onEvent) => {
+      return attachTerminal("本机终端", "local", async (onEvent) => {
         return terminalApi.openLocal(null, onEvent);
       }, targetPaneId);
     },
@@ -279,7 +324,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   // 打开 WSL 终端
   const openWslTerminal = useCallback(
     (distro: string, targetPaneId?: string) => {
-      void attachTerminal(`WSL: ${distro}`, "wsl", async (onEvent) => {
+      return attachTerminal(`WSL: ${distro}`, "wsl", async (onEvent) => {
         return terminalApi.openWsl(distro, null, onEvent);
       }, targetPaneId);
     },
@@ -289,7 +334,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   // 打开 SSH 终端
   const openSshTerminal = useCallback(
     (session: SessionDto, targetPaneId?: string) => {
-      void attachTerminal(session.deviceName || `SSH: ${session.endpoint}`, "ssh", async (onEvent) => {
+      return attachTerminal(session.deviceName || `SSH: ${session.endpoint}`, "ssh", async (onEvent) => {
         return terminalApi.open(session.sessionId, 80, 24, onEvent);
       }, targetPaneId, session.deviceIdentityId);
     },
@@ -299,10 +344,10 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   // 新建当前窗口对应设备的终端（当前是本机就新建本机的，ssh就新建ssh的，wsl新建wsl的）
   const createTerminalForCurrentDevice = useCallback(
     async (targetPaneId?: string) => {
-      // 空白窗口不读取共享 localStorage 的历史工作区，避免继承主窗口的 SSH/WSL 环境
+      // 非主窗口不读取共享 localStorage 的历史工作区，避免继承主窗口的 SSH/WSL 环境
       const root =
         explorerStore.getState().rootPath ||
-        (isBlankWindow() ? null : localStorage.getItem("glance.recentRoot"));
+        (isPrimaryWindow() ? localStorage.getItem("glance.recentRoot") : null);
 
       // 1. 如果当前工作区是 SSH 远程工作区（remote://...）
       if (root?.startsWith("remote://")) {
@@ -319,7 +364,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
             liveSessions.find((s) => s.deviceIdentityId === devId || s.profileId === devId) ||
             liveSessions[0];
           if (session) {
-            openSshTerminal(session, targetPaneId);
+            await openSshTerminal(session, targetPaneId);
             return;
           }
         }
@@ -330,14 +375,14 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
         const match = root.match(/^wsl:\/\/([^/]+)/);
         const distro = match ? match[1] : (wslDistros[0]?.name || null);
         if (distro) {
-          openWslTerminal(distro, targetPaneId);
+          await openWslTerminal(distro, targetPaneId);
           return;
         }
       }
 
       // 3. 检查当前是否有活跃的 SSH 会话（例如在远程面板连接后未打开文件夹）
-      //    空白窗口例外：SSH 会话是进程级共享的，空白窗口不该被别处会话带偏。
-      if (!isBlankWindow()) {
+      //    非主窗口例外：SSH 会话是进程级共享的，新开项目/空白窗口不该被别处会话带偏。
+      if (isPrimaryWindow()) {
         let liveSessions: SessionDto[] = [];
         try {
           liveSessions = await sshApi.listSessions();
@@ -345,44 +390,65 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
         } catch {}
 
         if (liveSessions.length > 0 && (!root || root.startsWith("remote://"))) {
-          openSshTerminal(liveSessions[0], targetPaneId);
+          await openSshTerminal(liveSessions[0], targetPaneId);
           return;
         }
       }
 
       // 4. 否则打开本机系统终端
-      openLocalTerminal(targetPaneId);
+      await openLocalTerminal(targetPaneId);
     },
     [wslDistros, openSshTerminal, openWslTerminal, openLocalTerminal],
   );
 
-  // 初始加载时若无终端，自动打开对应环境终端。
-  //
-  // 注意：createTerminalForCurrentDevice 的身份会随 wslDistros / sessions 加载而改变，
-  // 若把它放进依赖数组，effect 会在「首次创建仍在途、termsMapRef 尚为空」时二次触发，
-  // 表现为关闭最后一个终端后重开面板出现两个终端。这里用 ref 持有最新实现 + 一次性标记。
+  // 面板可见且当前无终端时，自动打开对应环境终端；重新展开已有终端的面板时仅刷新尺寸并聚焦。
   const createDeviceTerminalRef = useRef(createTerminalForCurrentDevice);
   createDeviceTerminalRef.current = createTerminalForCurrentDevice;
-  const autoOpenedRef = useRef(false);
 
   useEffect(() => {
-    if (tab !== "terminal" || autoOpenedRef.current) return;
-    if (termsMapRef.current.size > 0) return;
-    autoOpenedRef.current = true;
+    if (!visible || tab !== "terminal") return;
 
-    const recentRoot = isBlankWindow() ? null : localStorage.getItem("glance.recentRoot");
-    const lastProfile = isBlankWindow() ? null : localStorage.getItem("glance.lastSshProfileId");
-    if (recentRoot?.startsWith("remote://") || lastProfile) {
-      // 如果上次处于 SSH 工作区，设置 2.5s 定时降级，等待 SSH 连接完成触发自动创建
-      const timer = setTimeout(() => {
-        if (termsMapRef.current.size === 0) {
-          void createDeviceTerminalRef.current();
+    if (termsMapRef.current.size > 0) {
+      requestAnimationFrame(() => {
+        for (const p of panes) {
+          if (!p.activeId) continue;
+          const item = termsMapRef.current.get(p.activeId);
+          if (!item) continue;
+          try {
+            item.fit.fit();
+            void terminalApi.resize(item.channelId, item.term.cols, item.term.rows);
+          } catch {}
+          if (p.id === activePaneId) {
+            item.term.focus();
+          }
         }
+      });
+      return;
+    }
+
+    if (openingAutoRef.current) return;
+
+    const recentRoot = isPrimaryWindow() ? localStorage.getItem("glance.recentRoot") : null;
+    const lastProfile = isPrimaryWindow() ? localStorage.getItem("glance.lastSshProfileId") : null;
+    if (!initialSshWaitDoneRef.current && (recentRoot?.startsWith("remote://") || lastProfile)) {
+      // 首次启动且上次处于 SSH 工作区时，短暂等待 SSH 恢复完成后再兜底创建
+      const timer = setTimeout(() => {
+        initialSshWaitDoneRef.current = true;
+        if (!mountedRef.current || termsMapRef.current.size > 0 || openingAutoRef.current) return;
+        openingAutoRef.current = true;
+        void createDeviceTerminalRef.current().finally(() => {
+          openingAutoRef.current = false;
+        });
       }, 2500);
       return () => clearTimeout(timer);
     }
-    void createDeviceTerminalRef.current();
-  }, [tab]);
+
+    initialSshWaitDoneRef.current = true;
+    openingAutoRef.current = true;
+    void createDeviceTerminalRef.current().finally(() => {
+      openingAutoRef.current = false;
+    });
+  }, [tab, visible]);
 
   // 监听 SSH 连接与断开事件，动态同步最新会话池
   useEffect(() => {
@@ -391,10 +457,15 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
         const list = await sshApi.listSessions();
         setSessions(list);
         if (termsMapRef.current.size === 0) {
-          void createTerminalForCurrentDevice();
+          if (visibleRef.current && !openingAutoRef.current) {
+            openingAutoRef.current = true;
+            void createTerminalForCurrentDevice().finally(() => {
+              openingAutoRef.current = false;
+            });
+          }
         } else if (termsMapRef.current.size === 1) {
           const firstTerm = [...termsMapRef.current.values()][0];
-          if (firstTerm && firstTerm.type === "local") {
+          if (firstTerm && firstTerm.type === "local" && !firstTerm.hasInput) {
             // 将启动初期未交互的临时本机终端平滑替换为 SSH 远程终端
             void terminalApi.close(firstTerm.channelId).catch(() => {});
             firstTerm.term.dispose();
@@ -402,7 +473,11 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
             termsMapRef.current.delete(firstTerm.id);
             setPanes([{ id: "pane-0", tabIds: [], activeId: null }]);
             setTerms([]);
-            void createTerminalForCurrentDevice("pane-0");
+            onTerminalCountChangeRef.current?.(0);
+            openingAutoRef.current = true;
+            void createTerminalForCurrentDevice("pane-0").finally(() => {
+              openingAutoRef.current = false;
+            });
           }
         }
       } catch {}
@@ -436,6 +511,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
         }
         if (staleIds.length > 0) {
           setTerms([...termsMapRef.current.values()]);
+          onTerminalCountChangeRef.current?.(termsMapRef.current.size);
           setPanes((prev) => {
             const next = prev.map((p) => {
               const tabIds = p.tabIds.filter((tid) => !staleIds.includes(tid));
@@ -472,43 +548,57 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
     return () => window.removeEventListener("glance:new-terminal", handleNew);
   }, [activePaneId, createTerminalForCurrentDevice]);
 
-  // 窗格分屏：在指定窗格右侧创建新窗格，并放入指定终端（或新建终端）
-  const splitPaneAt = (targetPaneId: string, moveTermId?: string) => {
+  // 窗格分屏：在指定窗格左侧或右侧创建新窗格，并放入指定终端（或新建终端）
+  const splitPaneAt = (
+    targetPaneId: string,
+    moveTermId?: string,
+    side: "left" | "right" = "right",
+  ) => {
     const newPaneId = `pane-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
 
     if (moveTermId) {
-      // 从原窗格移除并移入新窗格
+      // 从原窗格移除并移入新窗格（先移除空窗格再定位目标索引，避免源窗格消失引起错位）
+      let didSplit = false;
       setPanes((prev) => {
-        const idx = prev.findIndex((p) => p.id === targetPaneId);
-        if (idx < 0) return prev;
+        const targetPane = prev.find((p) => p.id === targetPaneId);
+        if (!targetPane) return prev;
+        if (targetPane.tabIds.includes(moveTermId) && targetPane.tabIds.length <= 1) {
+          return prev;
+        }
 
-        const updated = prev.map((p) => {
-          if (p.tabIds.includes(moveTermId)) {
-            const nextTabs = p.tabIds.filter((tid) => tid !== moveTermId);
-            return {
-              ...p,
-              tabIds: nextTabs,
-              activeId: p.activeId === moveTermId ? (nextTabs[nextTabs.length - 1] ?? null) : p.activeId,
-            };
-          }
-          return p;
-        }).filter((p) => p.tabIds.length > 0 || p.id === targetPaneId);
+        const filtered = prev
+          .map((p) => {
+            if (p.tabIds.includes(moveTermId)) {
+              const nextTabs = p.tabIds.filter((tid) => tid !== moveTermId);
+              return {
+                ...p,
+                tabIds: nextTabs,
+                activeId: p.activeId === moveTermId ? (nextTabs[nextTabs.length - 1] ?? null) : p.activeId,
+              };
+            }
+            return p;
+          })
+          .filter((p) => p.tabIds.length > 0);
 
-        const insertIdx = idx + 1;
-        updated.splice(insertIdx, 0, {
+        const targetIdx = filtered.findIndex((p) => p.id === targetPaneId);
+        if (targetIdx < 0) return prev;
+
+        const insertIdx = side === "left" ? targetIdx : targetIdx + 1;
+        filtered.splice(insertIdx, 0, {
           id: newPaneId,
           tabIds: [moveTermId],
           activeId: moveTermId,
         });
-        return updated;
+        didSplit = true;
+        return filtered;
       });
-      setActivePaneId(newPaneId);
+      if (didSplit) setActivePaneId(newPaneId);
     } else {
       // 为新窗格新建当前环境终端
       setPanes((prev) => {
         const idx = prev.findIndex((p) => p.id === targetPaneId);
         const updated = [...prev];
-        const insertIdx = idx >= 0 ? idx + 1 : updated.length;
+        const insertIdx = idx >= 0 ? (side === "left" ? idx : idx + 1) : updated.length;
         updated.splice(insertIdx, 0, {
           id: newPaneId,
           tabIds: [],
@@ -549,6 +639,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
 
     const remaining = [...termsMapRef.current.values()];
     setTerms(remaining);
+    onTerminalCountChangeRef.current?.(remaining.length);
 
     // 剩最后一个终端时点击关闭，关闭终端并关闭整个终端下边栏
     if (remaining.length === 0) {
@@ -578,12 +669,14 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
     });
   }
 
-  // 尺寸自适应（最大化、分屏窗格增减、窗口尺寸变动）
+  // 尺寸自适应（最大化、分屏窗格增减、面板重新显示、窗口尺寸变动）
   useEffect(() => {
+    if (!visible || tab !== "terminal") return;
     const container = gridContainerRef.current;
     if (!container) return;
 
     const fitAll = () => {
+      if (!visibleRef.current) return;
       for (const p of panes) {
         if (p.activeId) {
           const item = termsMapRef.current.get(p.activeId);
@@ -610,7 +703,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [panes, isMaximized]);
+  }, [panes, isMaximized, tab, visible]);
 
   // 实时同步全部终端字体大小与配色主题
   useEffect(() => {
@@ -619,6 +712,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       item.term.options.fontSize = fontSize;
       item.term.options.theme = xtermTheme;
     }
+    if (!visible || tab !== "terminal") return;
     requestAnimationFrame(() => {
       for (const p of panes) {
         if (p.activeId) {
@@ -687,66 +781,75 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
         document.body.style.cursor = "grabbing";
         document.body.style.userSelect = "none";
       }
-      setDragState({
+      const nextDrag: TermDragState = {
         termId,
         fromPaneId,
         title,
         x: ev.clientX,
         y: ev.clientY,
         target: computeDropTarget(ev.clientX, ev.clientY),
-      });
+      };
+      dragStateRef.current = nextDrag;
+      setDragState(nextDrag);
     };
 
-    const finish = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);
       window.removeEventListener("pointercancel", finish);
-      if (!dragging) return;
+      dragCleanupRef.current = null;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-
-      setDragState((cur) => {
-        if (cur?.target) {
-          const { paneId, zone, index } = cur.target;
-          if (zone === "tabbar" || zone === "center") {
-            // 移动到目标窗格的标签栏
-            setPanes((prev) => {
-              const updated = prev.map((p) => {
-                if (p.id === cur.fromPaneId) {
-                  const nextTabs = p.tabIds.filter((t) => t !== cur.termId);
-                  return {
-                    ...p,
-                    tabIds: nextTabs,
-                    activeId: p.activeId === cur.termId ? (nextTabs[nextTabs.length - 1] ?? null) : p.activeId,
-                  };
-                }
-                return p;
-              });
-
-              return updated.map((p) => {
-                if (p.id === paneId) {
-                  const list = p.tabIds.filter((t) => t !== cur.termId);
-                  const ins = index !== undefined ? Math.min(index, list.length) : list.length;
-                  list.splice(ins, 0, cur.termId);
-                  return {
-                    ...p,
-                    tabIds: list,
-                    activeId: cur.termId,
-                  };
-                }
-                return p;
-              }).filter((p) => p.tabIds.length > 0 || p.id === paneId);
-            });
-            setActivePaneId(paneId);
-          } else if (zone === "left" || zone === "right") {
-            // 边缘放置：进行分屏
-            splitPaneAt(paneId, cur.termId);
-          }
-        }
-        return null;
-      });
     };
 
+    const finish = () => {
+      cleanup();
+      const cur = dragStateRef.current;
+      dragStateRef.current = null;
+      setDragState(null);
+      if (!dragging || !cur?.target) return;
+
+      const { paneId, zone, index } = cur.target;
+      if (zone === "tabbar" || zone === "center") {
+        // 移动到目标窗格的标签栏
+        setPanes((prev) => {
+          const updated = prev.map((p) => {
+            if (p.id === cur.fromPaneId) {
+              const nextTabs = p.tabIds.filter((t) => t !== cur.termId);
+              return {
+                ...p,
+                tabIds: nextTabs,
+                activeId: p.activeId === cur.termId ? (nextTabs[nextTabs.length - 1] ?? null) : p.activeId,
+              };
+            }
+            return p;
+          });
+
+          return updated
+            .map((p) => {
+              if (p.id === paneId) {
+                const list = p.tabIds.filter((t) => t !== cur.termId);
+                const ins = index !== undefined ? Math.min(index, list.length) : list.length;
+                list.splice(ins, 0, cur.termId);
+                return {
+                  ...p,
+                  tabIds: list,
+                  activeId: cur.termId,
+                };
+              }
+              return p;
+            })
+            .filter((p) => p.tabIds.length > 0 || p.id === paneId);
+        });
+        setActivePaneId(paneId);
+      } else if (zone === "left" || zone === "right") {
+        // 边缘放置：按拖放侧向进行分屏
+        splitPaneAt(paneId, cur.termId, zone);
+      }
+    };
+
+    dragCleanupRef.current?.();
+    dragCleanupRef.current = cleanup;
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
@@ -755,7 +858,13 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   // 运行构建任务
   async function runTask() {
     if (!sessions.length || running) return;
-    const session = sessions[0];
+    const root = explorerStore.getState().rootPath;
+    const remoteMatch = root?.match(/^remote:\/\/([^/]+)/);
+    const devId = remoteMatch?.[1];
+    const session =
+      (devId
+        ? sessions.find((s) => s.deviceIdentityId === devId || s.profileId === devId)
+        : undefined) ?? sessions[0];
     setRunning(true);
     setTab("tasks");
     setTaskOutput("");
@@ -965,7 +1074,10 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
                             if (activeItem.container.parentElement !== el) {
                               el.appendChild(activeItem.container);
                             }
-                            activeItem.container.style.display = "block";
+                            for (const child of Array.from(el.children)) {
+                              (child as HTMLElement).style.display =
+                                child === activeItem.container ? "block" : "none";
+                            }
                             requestAnimationFrame(() => {
                               try { activeItem.fit.fit(); } catch {}
                             });

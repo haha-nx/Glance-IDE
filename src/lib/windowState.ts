@@ -11,6 +11,25 @@ export function isBlankWindow(): boolean {
   }
 }
 
+/**
+ * 主窗口判定：只有未携带 `?blank=1`、`connect_ssh`、`connect_wsl`、`open_folder`
+ * 等定向启动参数的初始窗口，才有权读写共享的主工作区持久化状态，避免新开项目/远程窗口
+ * 覆盖主窗口的 tabs、rootPath 与 activePanel。
+ */
+export function isPrimaryWindow(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("blank") === "1") return false;
+    if (params.get("connect_ssh")) return false;
+    if (params.get("connect_wsl")) return false;
+    if (params.get("open_folder")) return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 export type PendingProfilePrefill = { host: string; port: number };
 
 /**

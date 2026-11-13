@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 use tokio::io::AsyncReadExt;
@@ -26,6 +27,8 @@ struct GithubAsset {
     name: String,
     browser_download_url: String,
     size: u64,
+    #[serde(default)]
+    digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -60,6 +63,7 @@ pub struct UpdateCheckResult {
     pub asset_name: Option<String>,
     pub asset_url: Option<String>,
     pub asset_size: Option<u64>,
+    pub asset_digest: Option<String>,
     pub platform: String,
     pub install_mode: String,
 }
@@ -282,13 +286,71 @@ fn sanitize_file_name(raw: &str) -> Result<String, String> {
 }
 
 fn validate_allowed_github_url(url: &str) -> Result<(), String> {
-    let ok = url.starts_with("https://github.com/haha-nx/Glance-IDE/")
+    if url.chars().any(|c| c.is_control() || c.is_whitespace()) || url.contains("..") {
+        return Err("更新 URL 包含非法字符或路径穿越片段".into());
+    }
+    let ok = url.starts_with("https://github.com/haha-nx/Glance-IDE/releases/")
         || url.starts_with("https://objects.githubusercontent.com/")
         || url.starts_with("https://release-assets.githubusercontent.com/");
     if !ok {
         return Err("不允许访问非官方 GitHub 发布来源的 URL".into());
     }
     Ok(())
+}
+
+fn normalize_sha256_digest(raw: Option<&str>) -> Result<Option<String>, String> {
+    let Some(s) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let hex = s.strip_prefix("sha256:").unwrap_or(s);
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("更新校验摘要格式无效".into());
+    }
+    Ok(Some(hex.to_ascii_lowercase()))
+}
+
+async fn compute_file_sha256(path: &Path) -> Result<String, String> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| format!("读取安装包计算校验失败: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .await
+            .map_err(|e| format!("读取安装包字节失败: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+async fn verify_installer_digest(path: &Path, expected_hex: Option<&str>) -> Result<(), String> {
+    let Some(expected) = expected_hex else {
+        return Ok(());
+    };
+    let actual = compute_file_sha256(path).await?;
+    if actual != expected {
+        return Err(format!(
+            "安装包 SHA-256 校验失败（期望 {expected}，实际 {actual}）"
+        ));
+    }
+    Ok(())
+}
+
+fn verify_path_in_update_cache(app: &tauri::AppHandle, raw_path: &str) -> Result<PathBuf, String> {
+    let cache_dir = resolve_update_cache_dir(app);
+    let canonical_cache = std::fs::canonicalize(&cache_dir)
+        .map_err(|_| "更新缓存目录不存在或无权访问，请重新下载更新包".to_string())?;
+    let canonical_file = std::fs::canonicalize(Path::new(raw_path))
+        .map_err(|_| "找不到已下载的更新包，请重新下载".to_string())?;
+    if !canonical_file.starts_with(&canonical_cache) || !canonical_file.is_file() {
+        return Err("拒绝操作更新缓存目录之外的文件".into());
+    }
+    Ok(canonical_file)
 }
 
 /// 从 GitHub Releases API 检测最新版本。
@@ -301,6 +363,11 @@ pub async fn check_github_update() -> Result<UpdateCheckResult, String> {
     configure_background_cmd(&mut cmd);
     cmd.args([
         "-sSL",
+        "--proto",
+        "=https",
+        "--tlsv1.2",
+        "--max-redirs",
+        "5",
         "--connect-timeout",
         "8",
         "--max-time",
@@ -363,6 +430,7 @@ pub async fn check_github_update() -> Result<UpdateCheckResult, String> {
             asset_name: None,
             asset_url: None,
             asset_size: None,
+            asset_digest: None,
             platform: platform.to_string(),
             install_mode: "manual".to_string(),
         });
@@ -392,6 +460,7 @@ pub async fn check_github_update() -> Result<UpdateCheckResult, String> {
         asset_name: asset.map(|a| a.name.clone()),
         asset_url: asset.map(|a| a.browser_download_url.clone()),
         asset_size: asset.map(|a| a.size),
+        asset_digest: asset.and_then(|a| a.digest.clone()),
         platform: platform.to_string(),
         install_mode,
     })
@@ -433,10 +502,12 @@ pub async fn download_update_installer(
     url: String,
     file_name: String,
     expected_size: Option<u64>,
+    expected_digest: Option<String>,
     on_event: Channel<UpdateDownloadProgress>,
 ) -> Result<DownloadInstallerResult, String> {
     validate_allowed_github_url(&url)?;
     let safe_name = sanitize_file_name(&file_name)?;
+    let normalized_digest = normalize_sha256_digest(expected_digest.as_deref())?;
     let platform = current_platform();
     let install_mode = determine_install_mode(platform, Some(&safe_name)).to_string();
 
@@ -451,18 +522,24 @@ pub async fn download_update_installer(
     let total_bytes = expected_size.unwrap_or(0);
     if let (Ok(meta), Some(exp)) = (tokio::fs::metadata(&target).await, expected_size) {
         if meta.len() == exp && exp > 0 {
-            let _ = on_event.send(UpdateDownloadProgress {
-                downloaded_bytes: exp,
-                total_bytes: exp,
-                speed_bytes_per_sec: 0,
-                status: "completed".into(),
-            });
-            return Ok(DownloadInstallerResult {
-                saved_path: target.to_string_lossy().to_string(),
-                size: exp,
-                already_existed: true,
-                install_mode,
-            });
+            if verify_installer_digest(&target, normalized_digest.as_deref())
+                .await
+                .is_ok()
+            {
+                let _ = on_event.send(UpdateDownloadProgress {
+                    downloaded_bytes: exp,
+                    total_bytes: exp,
+                    speed_bytes_per_sec: 0,
+                    status: "completed".into(),
+                });
+                return Ok(DownloadInstallerResult {
+                    saved_path: target.to_string_lossy().to_string(),
+                    size: exp,
+                    already_existed: true,
+                    install_mode,
+                });
+            }
+            let _ = tokio::fs::remove_file(&target).await;
         }
     }
 
@@ -478,6 +555,11 @@ pub async fn download_update_installer(
     cmd.stderr(Stdio::piped());
     cmd.args([
         "-fSL",
+        "--proto",
+        "=https",
+        "--tlsv1.2",
+        "--max-redirs",
+        "5",
         "--connect-timeout",
         "10",
         "--max-time",
@@ -583,6 +665,31 @@ pub async fn download_update_installer(
             status: "failed".into(),
         });
         return Err("下载的更新包为空文件".into());
+    }
+    if let Some(exp) = expected_size.filter(|s| *s > 0) {
+        if meta.len() != exp {
+            let _ = tokio::fs::remove_file(&part).await;
+            let _ = on_event.send(UpdateDownloadProgress {
+                downloaded_bytes: 0,
+                total_bytes,
+                speed_bytes_per_sec: 0,
+                status: "failed".into(),
+            });
+            return Err(format!(
+                "更新包大小不匹配（期望 {exp} 字节，实际 {} 字节），已终止保存",
+                meta.len()
+            ));
+        }
+    }
+    if let Err(err) = verify_installer_digest(&part, normalized_digest.as_deref()).await {
+        let _ = tokio::fs::remove_file(&part).await;
+        let _ = on_event.send(UpdateDownloadProgress {
+            downloaded_bytes: 0,
+            total_bytes,
+            speed_bytes_per_sec: 0,
+            status: "failed".into(),
+        });
+        return Err(err);
     }
 
     let _ = tokio::fs::remove_file(&target).await;
@@ -725,7 +832,6 @@ async fn prepare_macos_in_place_update(
                 "attach",
                 "-nobrowse",
                 "-readonly",
-                "-noverify",
                 "-noautoopen",
                 "-mountpoint",
             ])
@@ -1093,10 +1199,7 @@ pub async fn apply_update_and_restart(
     app_state: State<'_, AppState>,
     path: String,
 ) -> Result<bool, String> {
-    let p = PathBuf::from(&path);
-    if !p.exists() {
-        return Err("找不到已下载的更新包，请重新下载".into());
-    }
+    let p = verify_path_in_update_cache(&app, &path)?;
 
     let will_restart = {
         #[cfg(target_os = "macos")]
@@ -1113,17 +1216,17 @@ pub async fn apply_update_and_restart(
         {
             let handled = prepare_linux_in_place_update(&app, &p).await?;
             if !handled {
-                open_downloaded_installer(path, false).await?;
+                open_downloaded_installer(app.clone(), path, false).await?;
             }
             handled
         }
     };
 
     if will_restart {
-        crate::shutdown_runtime_sessions(&app_state);
+        crate::shutdown_runtime_sessions_async(&app_state).await;
         let app_handle = app.clone();
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(180)).await;
+            tokio::time::sleep(Duration::from_millis(120)).await;
             app_handle.exit(0);
         });
     }
@@ -1131,13 +1234,14 @@ pub async fn apply_update_and_restart(
     Ok(will_restart)
 }
 
-/// 运行已下载的安装包，或在文件管理器中定位该文件。
+/// 运行已下载的安装包，或在文件管理器中定位该文件（严格限制在更新缓存目录内）。
 #[tauri::command]
-pub async fn open_downloaded_installer(path: String, reveal_only: bool) -> Result<(), String> {
-    let p = PathBuf::from(&path);
-    if !p.exists() {
-        return Err("找不到安装包文件，可能已被移动或删除".into());
-    }
+pub async fn open_downloaded_installer(
+    app: tauri::AppHandle,
+    path: String,
+    reveal_only: bool,
+) -> Result<(), String> {
+    let p = verify_path_in_update_cache(&app, &path)?;
 
     if reveal_only {
         return reveal_local_path_sync(&p);
@@ -1239,21 +1343,25 @@ mod tests {
                 name: "Glance.IDE_0.2.0_universal.dmg".into(),
                 browser_download_url: "https://example.com/mac-dmg".into(),
                 size: 100,
+                digest: None,
             },
             GithubAsset {
                 name: "Glance.IDE_0.2.0_universal.app.tar.gz".into(),
                 browser_download_url: "https://example.com/mac-tar".into(),
                 size: 110,
+                digest: None,
             },
             GithubAsset {
                 name: "Glance.IDE_0.2.0_x64_en-US.msi".into(),
                 browser_download_url: "https://example.com/msi".into(),
                 size: 200,
+                digest: None,
             },
             GithubAsset {
                 name: "Glance.IDE_0.2.0_x64-setup.exe".into(),
                 browser_download_url: "https://example.com/exe".into(),
                 size: 300,
+                digest: None,
             },
         ];
 
@@ -1288,5 +1396,24 @@ mod tests {
     fn sh_quote_escapes_special_characters() {
         assert_eq!(sh_quote("Glance IDE.app"), "'Glance IDE.app'");
         assert_eq!(sh_quote("O'Reilly/$HOME"), "'O'\\''Reilly/$HOME'");
+    }
+
+    #[test]
+    fn validates_github_urls_and_digests() {
+        assert!(validate_allowed_github_url(
+            "https://github.com/haha-nx/Glance-IDE/releases/download/v0.1.5/app.dmg"
+        )
+        .is_ok());
+        assert!(validate_allowed_github_url("https://github.com/evil/repo/releases/a.dmg").is_err());
+        assert!(validate_allowed_github_url(
+            "https://github.com/haha-nx/Glance-IDE/releases/../evil"
+        )
+        .is_err());
+
+        assert_eq!(
+            normalize_sha256_digest(Some(&format!("sha256:{}", "A".repeat(64)))).unwrap(),
+            Some("a".repeat(64))
+        );
+        assert!(normalize_sha256_digest(Some("sha256:short")).is_err());
     }
 }

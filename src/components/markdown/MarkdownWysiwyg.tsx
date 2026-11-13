@@ -95,42 +95,10 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
     refreshToc();
   }, [uri, refreshToc]);
 
-  // 初始化与外部变更监听
-  useEffect(() => {
-    const model = getModel(uri);
-    if (model) {
-      renderFromModel();
-    }
-
-    const sub = model?.onDidChangeContent(() => {
-      if (isInternalChangeRef.current) return;
-      renderFromModel();
-    });
-
-    // 监听 Model 异步创建完成事件（远程 SSH / WSL 读取完成后派发）
-    const handleModelCreated = (e: Event) => {
-      const detail = (e as CustomEvent<{ uri: string }>).detail;
-      if (detail && detail.uri === uri) {
-        renderFromModel();
-      }
-    };
-    window.addEventListener("glance:model-created", handleModelCreated);
-
-    return () => {
-      sub?.dispose();
-      window.removeEventListener("glance:model-created", handleModelCreated);
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    };
-  }, [uri, renderFromModel]);
-
-  // 当用户在富文本区域编辑时，防抖同步回 Monaco TextModel
-  const handleContentChange = () => {
-    if (isComposingRef.current) return;
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-
-    debounceTimerRef.current = setTimeout(() => {
-      if (!containerRef.current) return;
-      const md = domToMarkdown(containerRef.current);
+  const syncDomToModel = useCallback(
+    (el: HTMLElement | null, updateUiState: boolean) => {
+      if (!el) return;
+      const md = domToMarkdown(el);
       const model = getModel(uri);
       if (model && model.getValue() !== md) {
         isInternalChangeRef.current = true;
@@ -147,13 +115,69 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
           });
         }
       }
-      setStats({
-        chars: md.length,
-        lines: md.split("\n").filter((l) => l.trim().length > 0).length,
+      if (updateUiState) {
+        setStats({
+          chars: md.length,
+          lines: md.split("\n").filter((l) => l.trim().length > 0).length,
+        });
+        refreshToc();
+      }
+    },
+    [uri, refreshToc],
+  );
+
+  // 初始化与外部变更监听
+  useEffect(() => {
+    const mountedEl = containerRef.current;
+    const attachModelListener = () => {
+      const m = getModel(uri);
+      if (!m) return undefined;
+      return m.onDidChangeContent(() => {
+        if (isInternalChangeRef.current) return;
+        renderFromModel();
       });
-      refreshToc();
+    };
+
+    if (getModel(uri)) {
+      renderFromModel();
+    }
+    let sub = attachModelListener();
+
+    // 监听 Model 异步创建完成事件（远程 SSH / WSL 读取完成后派发）
+    const handleModelCreated = (e: Event) => {
+      const detail = (e as CustomEvent<{ uri: string }>).detail;
+      if (detail && detail.uri === uri) {
+        renderFromModel();
+        sub?.dispose();
+        sub = attachModelListener();
+      }
+    };
+    window.addEventListener("glance:model-created", handleModelCreated);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+        // 卸载/切模式前立刻把防抖队列里的 DOM 变更冲刷回 Monaco Model，防止丢失最后 250ms 的编辑
+        syncDomToModel(mountedEl ?? containerRef.current, false);
+      }
+      sub?.dispose();
+      window.removeEventListener("glance:model-created", handleModelCreated);
+    };
+  }, [uri, renderFromModel, syncDomToModel]);
+
+  // 当用户在富文本区域编辑时，防抖同步回 Monaco TextModel
+  const handleContentChange = () => {
+    if (isComposingRef.current) return;
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+
+    debounceTimerRef.current = setTimeout(() => {
+      debounceTimerRef.current = null;
+      syncDomToModel(containerRef.current, true);
     }, 250);
   };
+  const handleContentChangeRef = useRef(handleContentChange);
+  handleContentChangeRef.current = handleContentChange;
 
   // 监听待办复选框事件
   useEffect(() => {
@@ -163,7 +187,7 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
     const handleChange = (e: Event) => {
       const target = e.target as HTMLElement;
       if (target && target.tagName.toLowerCase() === "input" && target.getAttribute("type") === "checkbox") {
-        handleContentChange();
+        handleContentChangeRef.current();
       }
     };
 
@@ -533,6 +557,11 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
       execFormat("italic");
     } else if (isMeta && e.key.toLowerCase() === "s") {
       e.preventDefault();
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      syncDomToModel(containerRef.current, true);
       void tabsStore.getState().saveTab(uri);
     } else if (isMeta && e.key.toLowerCase() === "z") {
       e.preventDefault();

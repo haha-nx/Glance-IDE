@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 use uuid::Uuid;
 
 use crate::filesystem::sftp::SftpFileSystem;
@@ -25,27 +25,64 @@ pub struct SessionEntry {
     pub(crate) handle: AsyncMutex<SshHandle<ClientHandler>>,
     /// 懒初始化的 SFTP Provider（一个会话一个 SFTP Channel）
     sftp: AsyncMutex<Option<Arc<SftpFileSystem>>>,
+    /// 供 find_by_device / list_sessions 在发现僵尸连接时立即唤醒 watchdog
+    check_notify: Arc<Notify>,
 }
 
 impl SessionEntry {
+    pub fn check_notify(&self) -> Arc<Notify> {
+        self.check_notify.clone()
+    }
+
+    pub fn trigger_check(&self) {
+        self.check_notify.notify_waiters();
+    }
+
+    /// 清除缓存的 SFTP Provider（传输异常断开时触发重建）
+    pub async fn invalidate_sftp(&self) {
+        *self.sftp.lock().await = None;
+    }
+
     /// 获取（或创建）本会话的 SFTP Provider。
     pub async fn ensure_sftp(&self) -> Result<Arc<SftpFileSystem>, String> {
         let mut slot = self.sftp.lock().await;
         if let Some(existing) = slot.as_ref() {
-            return Ok(existing.clone());
+            if self.is_alive().await {
+                return Ok(existing.clone());
+            }
+            *slot = None;
+            self.trigger_check();
+            return Err("SSH 连接已断开，请重新连接".into());
         }
-        let handle = self.handle.lock().await;
-        let channel = handle
-            .channel_open_session()
+        let channel = {
+            let handle = self.handle.lock().await;
+            if handle.is_closed() {
+                self.trigger_check();
+                return Err("SSH 连接已断开，请重新连接".into());
+            }
+            let ch = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                handle.channel_open_session(),
+            )
             .await
+            .map_err(|_| "打开 SFTP 通道超时 (15s)".to_string())?
             .map_err(|e| format!("打开 SFTP 通道失败: {e}"))?;
-        channel
-            .request_subsystem(true, "sftp")
+            tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                ch.request_subsystem(true, "sftp"),
+            )
             .await
+            .map_err(|_| "请求 sftp subsystem 超时 (15s)".to_string())?
             .map_err(|e| format!("请求 sftp subsystem 失败: {e}"))?;
-        let session = SftpSession::new(channel.into_stream())
-            .await
-            .map_err(|e| format!("SFTP 初始化失败: {e}"))?;
+            ch
+        };
+        let session = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            SftpSession::new(channel.into_stream()),
+        )
+        .await
+        .map_err(|_| "SFTP 初始化超时 (15s)".to_string())?
+        .map_err(|e| format!("SFTP 初始化失败: {e}"))?;
         let provider = Arc::new(SftpFileSystem::new(session));
         *slot = Some(provider.clone());
         Ok(provider)
@@ -80,9 +117,9 @@ impl SessionEntry {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SessionManager {
-    sessions: StdMutex<HashMap<Uuid, Arc<SessionEntry>>>,
+    sessions: Arc<StdMutex<HashMap<Uuid, Arc<SessionEntry>>>>,
 }
 
 impl SessionManager {
@@ -106,6 +143,7 @@ impl SessionManager {
             connected_at,
             handle: AsyncMutex::new(handle),
             sftp: AsyncMutex::new(None),
+            check_notify: Arc::new(Notify::new()),
         });
         self.sessions.lock().unwrap().insert(session_id, entry.clone());
         entry
@@ -115,8 +153,8 @@ impl SessionManager {
         self.sessions.lock().unwrap().get(session_id).cloned()
     }
 
-    /// 清理传输已断开的僵尸会话（设备重启/网络切换后 handle 置 closed）。
-    /// 返回被移除的会话 id。会话条目此前永不回收，导致文件操作路由到死会话。
+    /// 清理传输已断开的僵尸会话（供测试及显式维护使用）。
+    /// 返回被移除的会话 id。
     pub async fn prune_dead(&self) -> Vec<Uuid> {
         let entries = self.list();
         let mut dead = Vec::new();
@@ -135,17 +173,39 @@ impl SessionManager {
         dead
     }
 
+    /// 列出所有当前传输仍存活的会话（遇到僵尸条目则唤醒 watchdog 回收，而不直接静默删掉导致漏报掉线弹窗）。
+    pub async fn list_alive(&self) -> Vec<Arc<SessionEntry>> {
+        let entries = self.list();
+        let mut alive = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if entry.is_alive().await {
+                alive.push(entry);
+            } else {
+                entry.trigger_check();
+            }
+        }
+        alive
+    }
+
     /// 按设备身份查找活跃会话（远程文件操作以 device_identity_id 路由）。
-    /// 先清理僵尸会话，再取**最新**一条——同设备多会话时 HashMap 遍历序随机，
-    /// 旧死会话可能被选中导致文件操作全部失败。
+    /// 按连接时间倒序优先返回最新存活会话；不在此处删表项，以免抢在 watchdog 之前吞掉 `ssh:session-lost` 事件。
     pub async fn find_by_device(&self, device_identity_id: &Uuid) -> Option<Arc<SessionEntry>> {
-        self.prune_dead().await;
-        let guard = self.sessions.lock().unwrap();
-        guard
-            .values()
-            .filter(|e| e.device_identity_id == *device_identity_id)
-            .max_by_key(|e| e.connected_at)
-            .cloned()
+        let mut candidates: Vec<Arc<SessionEntry>> = {
+            let guard = self.sessions.lock().unwrap();
+            guard
+                .values()
+                .filter(|e| e.device_identity_id == *device_identity_id)
+                .cloned()
+                .collect()
+        };
+        candidates.sort_by(|a, b| b.connected_at.cmp(&a.connected_at));
+        for entry in candidates {
+            if entry.is_alive().await {
+                return Some(entry);
+            }
+            entry.trigger_check();
+        }
+        None
     }
 
     /// 断开并移除某连接配置下的全部会话（connect_profile 替换语义：

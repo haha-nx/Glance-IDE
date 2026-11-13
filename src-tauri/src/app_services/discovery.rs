@@ -60,13 +60,11 @@ pub fn cidr_hosts(cidr: &str) -> Result<Vec<Ipv4Addr>, String> {
     let (addr, len) = parse_cidr(cidr)?;
     let bits = u32::from(addr);
     let host_bits = 32 - len;
-    let count = if host_bits >= 31 {
-        u64::from(1u32 << host_bits.min(16)) // 上限保护：最多枚举 65536
-    } else {
-        u64::from(1u32 << host_bits)
-    };
+    let count = 1u64 << host_bits.min(16); // 上限保护：最多枚举 65536
     let mask = if host_bits == 0 {
         0u32
+    } else if host_bits >= 32 {
+        u32::MAX
     } else {
         (1u32 << host_bits) - 1
     };
@@ -171,8 +169,8 @@ pub async fn scan_cidr(
 
 // ---------- mDNS ----------
 
-/// mDNS 浏览 SSH 服务（_ssh._tcp.local.）与工作站（_workstation._tcp.local.）。
-/// 事件经 sink 推送；cancel 置 true 即停止。
+/// mDNS 浏览 SSH 服务（_ssh._tcp.local.）。
+/// 事件经 sink 推送；cancel 置 true 即及时响应停止并关闭 mDNS 守护。
 pub async fn browse_mdns(
     cancel: Arc<AtomicBool>,
     mut sink: impl FnMut(DiscoveryCandidate) + Send,
@@ -180,12 +178,26 @@ pub async fn browse_mdns(
     let mdns = mdns_sd::ServiceDaemon::new().map_err(|e| format!("mDNS 启动失败: {e}"))?;
     let receiver = mdns
         .browse("_ssh._tcp.local.")
-        .map_err(|e| format!("mDNS 浏览失败: {e}"))?;
+        .map_err(|e| {
+            let _ = mdns.shutdown();
+            format!("mDNS 浏览失败: {e}")
+        })?;
 
-    while let Ok(event) = receiver.recv_async().await {
+    loop {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
+        let Ok(recv_res) = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            receiver.recv_async(),
+        )
+        .await
+        else {
+            continue;
+        };
+        let Ok(event) = recv_res else {
+            break;
+        };
         if let mdns_sd::ServiceEvent::ServiceResolved(info) = event {
             let resolved = info.as_resolved_service();
             let port = resolved.port;
@@ -205,6 +217,7 @@ pub async fn browse_mdns(
         }
     }
     let _ = mdns.stop_browse("_ssh._tcp.local.");
+    let _ = mdns.shutdown();
     Ok(())
 }
 
@@ -230,6 +243,12 @@ mod tests {
     fn cidr_host_count_is_capped() {
         // 大网段不会生成爆炸列表（上限 65534）
         let hosts = cidr_hosts("10.0.0.0/8").unwrap();
+        assert_eq!(hosts.len(), 65534);
+    }
+
+    #[test]
+    fn cidr_zero_prefix_does_not_overflow() {
+        let hosts = cidr_hosts("0.0.0.0/0").unwrap();
         assert_eq!(hosts.len(), 65534);
     }
 

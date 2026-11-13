@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { TitleBar } from "./components/common/TitleBar";
 import { TooltipLayer } from "./components/common/TooltipLayer";
@@ -30,7 +31,7 @@ import { workspaceApi } from "./services/workspace";
 import { appApi } from "./services/files";
 import { sshApi } from "./services/ssh";
 import { CmdError, type ConnectionProfileDto } from "./types/ssh";
-import { isBlankWindow } from "./lib/windowState";
+import { isPrimaryWindow } from "./lib/windowState";
 import { Button, Modal, PrimaryButton } from "./components/common/Modal";
 import { IconWarning } from "./components/common/icons";
 
@@ -38,6 +39,7 @@ import { IconWarning } from "./components/common/icons";
 function useCloseGuard(onBlocked: () => void): void {
   useEffect(() => {
     const win = getCurrentWindow();
+    let disposed = false;
     let unlisten: (() => void) | null = null;
     const promise = win.onCloseRequested((event) => {
       if (tabsStore.getState().hasDirty()) {
@@ -46,9 +48,14 @@ function useCloseGuard(onBlocked: () => void): void {
       }
     });
     void promise.then((fn) => {
-      unlisten = fn;
+      if (disposed) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
     });
     return () => {
+      disposed = true;
       unlisten?.();
     };
   }, [onBlocked]);
@@ -70,18 +77,12 @@ function useWorkspacePersistence({
   const callbacksRef = useRef({ onSshReconnectFailed, onPanelRestored });
   callbacksRef.current = { onSshReconnectFailed, onPanelRestored };
 
-  // 恢复（如果是新建空白窗口或者指定了自连参数，跳过常规恢复；生命周期内严格仅执行一次）
+  // 恢复（如果是新开窗口或者指定了自连参数，跳过常规恢复；生命周期内严格仅执行一次）
   useEffect(() => {
     if (hasInitializedRef.current) return;
     hasInitializedRef.current = true;
 
-    const params = new URLSearchParams(window.location.search);
-    if (
-      params.get("blank") === "1" ||
-      params.get("connect_ssh") ||
-      params.get("connect_wsl") ||
-      params.get("open_folder")
-    ) {
+    if (!isPrimaryWindow()) {
       return;
     }
 
@@ -239,9 +240,9 @@ function useWorkspacePersistence({
   }, []);
 
   // 标签持久化（防抖 800ms）
-  // 空白窗口不写入，避免覆盖主窗口的工作区状态
+  // 非主窗口不写入，避免覆盖主窗口的工作区状态
   useEffect(() => {
-    if (isBlankWindow()) return;
+    if (!isPrimaryWindow()) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = tabsStore.subscribe((s) => {
       if (timer) clearTimeout(timer);
@@ -258,9 +259,9 @@ function useWorkspacePersistence({
     };
   }, []);
 
-  // 根目录持久化（空白窗口不写入）
+  // 根目录持久化（非主窗口不写入）
   useEffect(() => {
-    if (isBlankWindow()) return;
+    if (!isPrimaryWindow()) return;
     const unsub = explorerStore.subscribe((s) => {
       if (s.rootPath) {
         void workspaceApi.setUiState("workspace.root", s.rootPath).catch(() => {});
@@ -273,6 +274,8 @@ function useWorkspacePersistence({
 export function App() {
   const [activePanel, setActivePanel] = useState<string>("explorer");
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
+  const [terminalMounted, setTerminalMounted] = useState(false);
+  const [terminalCount, setTerminalCount] = useState(0);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [pendingWindowClose, setPendingWindowClose] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -384,16 +387,30 @@ export function App() {
   // 初始化设置，并在「自动检测更新」明确开启时后台检测 GitHub 版本更新（默认关闭时不主动检查或推送）
   useEffect(() => {
     let checkTimer: ReturnType<typeof setTimeout> | null = null;
-    const params = new URLSearchParams(window.location.search);
+    let disposed = false;
+    let unlistenMenuSettings: (() => void) | null = null;
 
     void settingsStore
       .getState()
       .hydrate()
       .then((resolved) => {
-        if (resolved.autoCheckUpdate && params.get("blank") !== "1") {
+        if (!disposed && resolved.autoCheckUpdate && isPrimaryWindow()) {
           checkTimer = setTimeout(() => {
             void updaterStore.getState().checkForUpdates({ manual: false });
           }, 2500);
+        }
+      });
+
+    void getCurrentWebviewWindow()
+      .listen("menu:settings", () => {
+        setSettingsSection("appearance");
+        setSettingsOpen(true);
+      })
+      .then((fn) => {
+        if (disposed) {
+          fn();
+        } else {
+          unlistenMenuSettings = fn;
         }
       });
 
@@ -422,6 +439,8 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
 
     return () => {
+      disposed = true;
+      unlistenMenuSettings?.();
       window.removeEventListener("keydown", onKeyDown);
       if (checkTimer) clearTimeout(checkTimer);
     };
@@ -533,12 +552,18 @@ export function App() {
     window.addEventListener("mouseup", onUp);
   }, []);
 
-  // 持久化活动侧边栏面板（空白窗口不写入，避免覆盖主窗口状态）
+  // 持久化活动侧边栏面板（非主窗口不写入，避免覆盖主窗口状态）
   useEffect(() => {
-    if (isBlankWindow()) return;
+    if (!isPrimaryWindow()) return;
     void workspaceApi.setUiState("workspace.activePanel", activePanel).catch(() => {});
     localStorage.setItem("glance.activePanel", activePanel);
   }, [activePanel]);
+
+  useEffect(() => {
+    if (bottomPanelOpen) {
+      setTerminalMounted(true);
+    }
+  }, [bottomPanelOpen]);
 
   // 监听新窗口自连与直开目录参数（?open_folder=... / ?connect_ssh=... / ?connect_wsl=...）
   useEffect(() => {
@@ -638,7 +663,11 @@ export function App() {
 
   const handleNewTerminal = () => {
     if (!bottomPanelOpen) {
+      setTerminalMounted(true);
       setBottomPanelOpen(true);
+      if (terminalMounted && terminalCount > 0) {
+        window.dispatchEvent(new CustomEvent("glance:new-terminal"));
+      }
     } else {
       window.dispatchEvent(new CustomEvent("glance:new-terminal"));
     }
@@ -776,12 +805,12 @@ export function App() {
           <div className={`min-h-0 ${bottomPanelOpen && terminalMaximized ? "hidden" : "flex-1"}`}>
             <EditorArea />
           </div>
-          {bottomPanelOpen && (
+          {terminalMounted && (
             <div
               style={terminalMaximized ? undefined : { height: `${bottomPanelHeight}px` }}
-              className={`relative shrink-0 border-t border-zinc-800 flex flex-col ${
-                terminalMaximized ? "flex-1 h-full" : ""
-              }`}
+              className={`relative shrink-0 border-t border-zinc-800 flex-col ${
+                bottomPanelOpen ? "flex" : "hidden"
+              } ${terminalMaximized ? "flex-1 h-full" : ""}`}
             >
               {/* 下边栏上边缘拖拽调节手柄 */}
               {!terminalMaximized && (
@@ -801,9 +830,11 @@ export function App() {
                 />
               )}
               <TerminalPanel
+                visible={bottomPanelOpen}
                 onClose={() => setBottomPanelOpen(false)}
                 isMaximized={terminalMaximized}
                 onToggleMaximize={() => setTerminalMaximized((v) => !v)}
+                onTerminalCountChange={setTerminalCount}
               />
             </div>
           )}

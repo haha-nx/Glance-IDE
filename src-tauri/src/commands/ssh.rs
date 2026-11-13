@@ -63,6 +63,7 @@ pub struct SessionDto {
 
 // ---------- 校验 ----------
 
+#[allow(clippy::too_many_arguments)]
 fn validate_profile_input(
     name: &str,
     host: &str,
@@ -72,6 +73,7 @@ fn validate_profile_input(
     password: &Option<String>,
     key_path: &Option<String>,
     identity_mode: &str,
+    require_password: bool,
 ) -> Result<(), CmdError> {
     if name.trim().is_empty() {
         return Err(CmdError::validation("名称不能为空"));
@@ -87,7 +89,7 @@ fn validate_profile_input(
     }
     match auth_method {
         "password" => {
-            if password.as_deref().unwrap_or("").is_empty() {
+            if require_password && password.as_deref().unwrap_or("").is_empty() {
                 return Err(CmdError::validation("密码认证需要提供密码"));
             }
         }
@@ -126,19 +128,29 @@ pub async fn create_profile(
     key_passphrase: Option<String>,
     identity_mode: String,
 ) -> Result<ConnectionProfileDto, CmdError> {
-    validate_profile_input(&name, &host, port, &username, &auth_method, &password, &key_path, &identity_mode)?;
+    validate_profile_input(
+        &name,
+        &host,
+        port,
+        &username,
+        &auth_method,
+        &password,
+        &key_path,
+        &identity_mode,
+        true,
+    )?;
 
-    let id = Uuid::new_v4();
+    let secret_seed = Uuid::new_v4();
     // 凭据只存 OS 凭据库：密码与私钥口令分别使用独立引用
     let credential_ref = match auth_method.as_str() {
         "password" => {
-            let r = format!("glance://profile/{id}");
+            let r = format!("glance://profile/{secret_seed}");
             state.secrets.set_secret(&r, password.as_deref().unwrap_or(""))?;
             Some(r)
         }
         "public_key" => match key_passphrase.as_deref().filter(|s| !s.is_empty()) {
             Some(pass) => {
-                let r = format!("glance://keypass/{id}");
+                let r = format!("glance://keypass/{secret_seed}");
                 state.secrets.set_secret(&r, pass)?;
                 Some(r)
             }
@@ -155,9 +167,17 @@ pub async fn create_profile(
         auth_method,
         identity_mode,
         key_path: key_path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
-        credential_ref,
+        credential_ref: credential_ref.clone(),
     };
-    let id = connection_profiles::create_profile(&state.db, &fields)?;
+    let id = match connection_profiles::create_profile(&state.db, &fields) {
+        Ok(id) => id,
+        Err(e) => {
+            if let Some(ref r) = credential_ref {
+                let _ = state.secrets.delete_secret(r);
+            }
+            return Err(e.into());
+        }
+    };
     Ok(profile_by_id(&state, id).await?)
 }
 
@@ -176,35 +196,69 @@ pub async fn update_profile(
     identity_mode: String,
 ) -> Result<ConnectionProfileDto, CmdError> {
     let id = parse_uuid(&profile_id, "profile_id")?;
-    validate_profile_input(&name, &host, port, &username, &auth_method, &password, &key_path, &identity_mode)?;
-
     let existing = connection_profiles::get_profile(&state.db, id)?
         .ok_or_else(|| CmdError::validation("连接配置不存在"))?;
 
-    // 凭据更新：仅在用户提供了新值时覆写；密码与口令引用保持原有形态
+    let has_existing_password =
+        existing.auth_method == "password" && existing.credential_ref.is_some();
+    validate_profile_input(
+        &name,
+        &host,
+        port,
+        &username,
+        &auth_method,
+        &password,
+        &key_path,
+        &identity_mode,
+        !has_existing_password,
+    )?;
+
+    // 凭据更新：严格隔离 password（profile/）与 public_key 口令（keypass/），禁止跨认证模式误用旧凭据
+    let mut old_secret_to_delete: Option<String> = None;
     let credential_ref = match auth_method.as_str() {
         "password" => {
-            let r = existing
-                .credential_ref
-                .clone()
-                .unwrap_or_else(|| format!("glance://profile/{id}"));
-            if let Some(pass) = password.as_deref().filter(|s| !s.is_empty()) {
-                state.secrets.set_secret(&r, pass)?;
+            let new_ref = format!("glance://profile/{id}");
+            if existing.auth_method == "password" {
+                let r = existing.credential_ref.clone().unwrap_or_else(|| new_ref.clone());
+                if let Some(pass) = password.as_deref().filter(|s| !s.is_empty()) {
+                    state.secrets.set_secret(&r, pass)?;
+                }
+                Some(r)
+            } else {
+                let pass = password.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| {
+                    CmdError::validation("切换到密码认证时需要提供密码")
+                })?;
+                state.secrets.set_secret(&new_ref, pass)?;
+                if existing.credential_ref.as_deref() != Some(new_ref.as_str()) {
+                    old_secret_to_delete = existing.credential_ref.clone();
+                }
+                Some(new_ref)
             }
-            Some(r)
         }
         "public_key" => {
+            let new_ref = format!("glance://keypass/{id}");
             let has_pass = key_passphrase.as_deref().filter(|s| !s.is_empty());
             match has_pass {
                 Some(pass) => {
-                    let r = existing
-                        .credential_ref
-                        .clone()
-                        .unwrap_or_else(|| format!("glance://keypass/{id}"));
-                    state.secrets.set_secret(&r, pass)?;
-                    Some(r)
+                    let target_ref = if existing.auth_method == "public_key" {
+                        existing.credential_ref.clone().unwrap_or_else(|| new_ref.clone())
+                    } else {
+                        if existing.credential_ref.as_deref() != Some(new_ref.as_str()) {
+                            old_secret_to_delete = existing.credential_ref.clone();
+                        }
+                        new_ref
+                    };
+                    state.secrets.set_secret(&target_ref, pass)?;
+                    Some(target_ref)
                 }
-                None => existing.credential_ref.clone(),
+                None => {
+                    if existing.auth_method == "public_key" {
+                        existing.credential_ref.clone()
+                    } else {
+                        old_secret_to_delete = existing.credential_ref.clone();
+                        None
+                    }
+                }
             }
         }
         _ => existing.credential_ref.clone(),
@@ -221,6 +275,9 @@ pub async fn update_profile(
         credential_ref,
     };
     connection_profiles::update_profile(&state.db, id, &fields)?;
+    if let Some(old_ref) = old_secret_to_delete {
+        let _ = state.secrets.delete_secret(&old_ref);
+    }
     Ok(profile_by_id(&state, id).await?)
 }
 
@@ -354,8 +411,6 @@ fn spawn_session_watchdog(
 ) {
     tauri::async_runtime::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
             let entry = {
                 let state = app.state::<AppState>();
                 let found = state.sessions.get(&session_id);
@@ -369,46 +424,53 @@ fn spawn_session_watchdog(
                 break;
             };
 
-            if entry.is_alive().await {
-                continue;
+            if !entry.is_alive().await {
+                let prompt_window_label = {
+                    let state = app.state::<AppState>();
+                    // 确保后端关联的 LSP 与 SSH 终端同步回收
+                    crate::app_services::lsp::close_by_session(&state.lsp, &session_id).await;
+                    crate::app_services::terminal::close_by_session(&state.terminals, &session_id);
+                    state.sessions.disconnect(&session_id).await;
+                    let initiator_label = state.session_windows.lock().unwrap().remove(&session_id);
+                    let window_devices = state.window_devices.lock().unwrap().clone();
+                    let last_focused = state.last_focused_window.lock().unwrap().clone();
+                    let webview_windows = app.webview_windows();
+                    let open_windows: Vec<(String, bool)> = webview_windows
+                        .iter()
+                        .map(|(label, win)| (label.clone(), win.is_focused().unwrap_or(false)))
+                        .collect();
+                    let open_refs: Vec<(&str, bool)> = open_windows
+                        .iter()
+                        .map(|(l, f)| (l.as_str(), *f))
+                        .collect();
+                    select_prompt_window_label(
+                        device_identity_id,
+                        &open_refs,
+                        &window_devices,
+                        last_focused.as_deref(),
+                        initiator_label.as_deref(),
+                    )
+                };
+
+                let _ = app.emit(
+                    "ssh:session-lost",
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        "profileId": profile_id,
+                        "deviceIdentityId": device_identity_id,
+                        "deviceName": device_name,
+                        "endpoint": endpoint,
+                        "promptWindowLabel": prompt_window_label,
+                    }),
+                );
+                break;
             }
 
-            let prompt_window_label = {
-                let state = app.state::<AppState>();
-                state.sessions.disconnect(&session_id).await;
-                let initiator_label = state.session_windows.lock().unwrap().remove(&session_id);
-                let window_devices = state.window_devices.lock().unwrap().clone();
-                let last_focused = state.last_focused_window.lock().unwrap().clone();
-                let webview_windows = app.webview_windows();
-                let open_windows: Vec<(String, bool)> = webview_windows
-                    .iter()
-                    .map(|(label, win)| (label.clone(), win.is_focused().unwrap_or(false)))
-                    .collect();
-                let open_refs: Vec<(&str, bool)> = open_windows
-                    .iter()
-                    .map(|(l, f)| (l.as_str(), *f))
-                    .collect();
-                select_prompt_window_label(
-                    device_identity_id,
-                    &open_refs,
-                    &window_devices,
-                    last_focused.as_deref(),
-                    initiator_label.as_deref(),
-                )
-            };
-
-            let _ = app.emit(
-                "ssh:session-lost",
-                serde_json::json!({
-                    "sessionId": session_id,
-                    "profileId": profile_id,
-                    "deviceIdentityId": device_identity_id,
-                    "deviceName": device_name,
-                    "endpoint": endpoint,
-                    "promptWindowLabel": prompt_window_label,
-                }),
-            );
-            break;
+            let notify = entry.check_notify();
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                _ = notify.notified() => {}
+            }
         }
     });
 }
@@ -557,11 +619,11 @@ pub async fn remote_home(
 
 #[tauri::command]
 pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionDto>, CmdError> {
-    // 先清理传输已断开的僵尸会话：UI 不再显示死会话绿灯，文件操作也不再路由到它们
-    state.sessions.prune_dead().await;
+    // 仅过滤返回存活会话并唤醒 watchdog 清理僵尸，避免在此直接删表项导致漏报 ssh:session-lost
     Ok(state
         .sessions
-        .list()
+        .list_alive()
+        .await
         .into_iter()
         .map(|e| SessionDto {
             session_id: e.session_id,
@@ -600,8 +662,9 @@ pub async fn disconnect_session(
 ) -> Result<bool, CmdError> {
     let sid = parse_uuid(&session_id, "session_id")?;
     state.session_windows.lock().unwrap().remove(&sid);
-    // 先回收本会话的 LSP 通道（生命周期：随会话关闭）
+    // 先回收本会话关联的 LSP 与 SSH 终端通道
     crate::app_services::lsp::close_by_session(&state.lsp, &sid).await;
+    crate::app_services::terminal::close_by_session(&state.terminals, &sid);
     Ok(state.sessions.disconnect(&sid).await)
 }
 

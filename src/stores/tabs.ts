@@ -109,6 +109,10 @@ interface TabsState {
   moveTab(uri: string, fromGroupId: string, toGroupId: string, index?: number): void;
   /** 拖拽/按钮拆分：在目标分组的某一侧新建分组并放入该标签 */
   splitTab(uri: string, fromGroupId: string, targetGroupId: string, side: SplitSide, copy?: boolean): void;
+  /** 文件或目录重命名后，同步更新已打开标签及 Monaco Model */
+  handlePathRenamed(oldPath: string, newPath: string): void;
+  /** 文件或目录删除后，自动关闭受影响的未修改标签 */
+  handlePathDeleted(deletedPath: string, isDir: boolean): void;
 }
 
 let idSeq = 0;
@@ -117,7 +121,7 @@ const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${(idSeq
 const INITIAL_GROUP = "group-main";
 
 async function readFileIntoTab(path: string, uri: string): Promise<EditorTab> {
-  const name = path.split("/").pop() ?? path;
+  const name = path.split(/[\\/]/).pop() ?? path;
   const content = await filesApi.readFile(path);
   if (content.binary) {
     return {
@@ -639,6 +643,118 @@ export const tabsStore = create<TabsState>()((set, get) => ({
         rows.splice(side === "top" ? rowIdx : rowIdx + 1, 0, gid);
       }
       return { groups, layout, activeGroupId: gid, activeId: uri };
+    });
+  },
+
+  handlePathRenamed: (oldPath, newPath) => {
+    const cleanOld = oldPath.replace(/[\\/]+$/, "");
+    const cleanNew = newPath.replace(/[\\/]+$/, "");
+    const normOld = cleanOld.replace(/\\/g, "/");
+    const matchesTarget = (p: string): string | null => {
+      const normP = p.replace(/\\/g, "/");
+      if (normP === normOld) return newPath;
+      if (normP.startsWith(`${normOld}/`)) {
+        const suffix = p.slice(cleanOld.length);
+        return `${cleanNew}${suffix}`;
+      }
+      return null;
+    };
+
+    const uriRenameMap = new Map<string, string>();
+    const modelsToDispose: string[] = [];
+
+    set((s) => {
+      let anyChanged = false;
+      const nextTabs = s.tabs.map((t) => {
+        if (t.diff) return t;
+        const nextPath = matchesTarget(t.path);
+        if (!nextPath) return t;
+        anyChanged = true;
+        const nextUri = toModelUri(nextPath);
+        const nextName = nextPath.split(/[\\/]/).pop() ?? nextPath;
+        if (nextUri !== t.uri) {
+          uriRenameMap.set(t.uri, nextUri);
+          const oldModel = getModel(t.uri);
+          if (oldModel) {
+            getOrCreateModel(nextUri, oldModel.getValue(), nextName);
+            modelsToDispose.push(t.uri);
+          }
+        }
+        return { ...t, uri: nextUri, path: nextPath, name: nextName };
+      });
+      if (!anyChanged) return {};
+
+      const mapUri = (u: string) => uriRenameMap.get(u) ?? u;
+      const groups: Record<string, EditorGroup> = {};
+      for (const [gid, g] of Object.entries(s.groups)) {
+        groups[gid] = {
+          ...g,
+          tabUris: g.tabUris.map(mapUri),
+          activeUri: g.activeUri ? mapUri(g.activeUri) : null,
+        };
+      }
+      return {
+        tabs: nextTabs,
+        groups,
+        activeId: s.activeId ? mapUri(s.activeId) : null,
+        pendingCloseId: s.pendingCloseId ? mapUri(s.pendingCloseId) : null,
+        pendingReveal: s.pendingReveal
+          ? { ...s.pendingReveal, uri: mapUri(s.pendingReveal.uri) }
+          : null,
+        pendingConflict: s.pendingConflict
+          ? {
+              ...s.pendingConflict,
+              uri: mapUri(s.pendingConflict.uri),
+              path: matchesTarget(s.pendingConflict.path) ?? s.pendingConflict.path,
+            }
+          : null,
+      };
+    });
+
+    for (const oldUri of modelsToDispose) {
+      disposeModel(oldUri);
+    }
+  },
+
+  handlePathDeleted: (deletedPath, isDir) => {
+    const cleanTarget = deletedPath.replace(/[\\/]+$/, "");
+    const normTarget = cleanTarget.replace(/\\/g, "/");
+    const isAffected = (p: string): boolean => {
+      const normP = p.replace(/\\/g, "/");
+      if (normP === normTarget) return true;
+      return isDir && normP.startsWith(`${normTarget}/`);
+    };
+
+    const staleUris: string[] = [];
+    for (const t of get().tabs) {
+      if (!t.diff && !t.dirty && isAffected(t.path)) {
+        staleUris.push(t.uri);
+      }
+    }
+    if (staleUris.length === 0) return;
+
+    for (const uri of staleUris) {
+      disposeModel(uri);
+    }
+    const staleSet = new Set(staleUris);
+    set((s) => {
+      const tabs = s.tabs.filter((t) => !staleSet.has(t.uri));
+      const groups: Record<string, EditorGroup> = {};
+      for (const [gid, g] of Object.entries(s.groups)) {
+        let nextList = g.tabUris;
+        let nextActive = g.activeUri;
+        for (const u of staleUris) {
+          const r = removeWithNeighbor(nextList, u, nextActive);
+          nextList = r.list;
+          nextActive = r.active;
+        }
+        groups[gid] = { ...g, tabUris: nextList, activeUri: nextActive };
+      }
+      return {
+        tabs,
+        groups,
+        activeId: groups[s.activeGroupId]?.activeUri ?? null,
+      };
     });
   },
 }));

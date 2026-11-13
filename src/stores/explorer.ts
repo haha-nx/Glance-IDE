@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { FileEntryDto } from "../types/ipc";
 import { filesApi } from "../services/files";
 import { workspaceApi } from "../services/workspace";
-import { isBlankWindow } from "../lib/windowState";
+import { isPrimaryWindow } from "../lib/windowState";
 
 /**
  * 文件树状态：childrenMap 缓存目录列表，按需懒加载。
@@ -70,8 +70,8 @@ interface ExplorerState {
 }
 
 export const explorerStore = create<ExplorerState>()((set, get) => ({
-  // 空白窗口不继承主窗口的工作区根目录
-  rootPath: isBlankWindow() ? null : localStorage.getItem(ROOT_KEY),
+  // 只有主窗口才继承持久化工作区根目录；多开/定向启动窗口保持独立上下文
+  rootPath: isPrimaryWindow() ? localStorage.getItem(ROOT_KEY) : null,
   rootError: null,
   childrenMap: {},
   expanded: {},
@@ -80,10 +80,12 @@ export const explorerStore = create<ExplorerState>()((set, get) => ({
 
   openRoot: async (path) => {
     workspaceGen += 1;
-    localStorage.setItem(ROOT_KEY, path);
-    if (!path.startsWith("remote://")) {
-      void workspaceApi.setUiState("workspace.lastSshProfileId", "").catch(() => {});
-      localStorage.removeItem("glance.lastSshProfileId");
+    if (isPrimaryWindow()) {
+      localStorage.setItem(ROOT_KEY, path);
+      if (!path.startsWith("remote://")) {
+        void workspaceApi.setUiState("workspace.lastSshProfileId", "").catch(() => {});
+        localStorage.removeItem("glance.lastSshProfileId");
+      }
     }
     set({
       rootPath: path,
@@ -97,10 +99,12 @@ export const explorerStore = create<ExplorerState>()((set, get) => ({
 
   closeRoot: () => {
     workspaceGen += 1;
-    localStorage.removeItem(ROOT_KEY);
-    void workspaceApi.setUiState("workspace.root", "").catch(() => {});
-    void workspaceApi.setUiState("workspace.lastSshProfileId", "").catch(() => {});
-    localStorage.removeItem("glance.lastSshProfileId");
+    if (isPrimaryWindow()) {
+      localStorage.removeItem(ROOT_KEY);
+      void workspaceApi.setUiState("workspace.root", "").catch(() => {});
+      void workspaceApi.setUiState("workspace.lastSshProfileId", "").catch(() => {});
+      localStorage.removeItem("glance.lastSshProfileId");
+    }
     set({
       rootPath: null,
       childrenMap: {},
@@ -122,13 +126,14 @@ export const explorerStore = create<ExplorerState>()((set, get) => ({
       set((s) => ({
         childrenMap: { ...s.childrenMap, [path]: sortEntries(entries) },
         loadingDirs: { ...s.loadingDirs, [path]: false },
+        rootError: path === s.rootPath ? null : s.rootError,
       }));
     } catch (err) {
       if (gen !== workspaceGen) return;
+      // 失败时不写入 [] 缓存，避免短暂抖动/未重连导致目录被永久当成空目录
       set((s) => ({
         loadingDirs: { ...s.loadingDirs, [path]: false },
         rootError: path === s.rootPath ? String(err) : s.rootError,
-        childrenMap: { ...s.childrenMap, [path]: [] },
       }));
     }
   },
@@ -263,6 +268,7 @@ export const explorerStore = create<ExplorerState>()((set, get) => ({
           childrenMap: nextChildren,
           expanded: nextExpanded,
           loadingDirs: silent ? s.loadingDirs : { ...s.loadingDirs, [path]: false },
+          rootError: path === s.rootPath ? null : s.rootError,
         };
       });
     } finally {

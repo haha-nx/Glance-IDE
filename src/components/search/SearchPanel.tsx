@@ -11,25 +11,49 @@ export function SearchPanel() {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seqRef = useRef(0);
+
+  const isRemoteOrWsl =
+    !!rootPath && (rootPath.startsWith("remote://") || rootPath.startsWith("wsl://"));
 
   useEffect(() => {
+    const seq = ++seqRef.current;
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (!rootPath) return;
+
+    if (!rootPath || isRemoteOrWsl || !query.trim()) {
+      setHits([]);
+      setSearching(false);
+      setSearched(false);
+      setError(null);
+      return;
+    }
+
     timerRef.current = setTimeout(async () => {
       setSearching(true);
+      setError(null);
       try {
         const result = await workspaceApi.search(rootPath, query);
+        if (seq !== seqRef.current) return;
         setHits(result);
         setSearched(true);
+      } catch (err) {
+        if (seq !== seqRef.current) return;
+        setHits([]);
+        setSearched(true);
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setSearching(false);
+        if (seq === seqRef.current) {
+          setSearching(false);
+        }
       }
     }, 350);
+
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [query, rootPath]);
+  }, [query, rootPath, isRemoteOrWsl]);
 
   // 按文件分组
   const groups = new Map<string, SearchHit[]>();
@@ -64,22 +88,38 @@ export function SearchPanel() {
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={rootPath ? "在文件夹中搜索…" : "先打开文件夹"}
-            disabled={!rootPath}
+            placeholder={
+              !rootPath
+                ? "先打开文件夹"
+                : isRemoteOrWsl
+                  ? "当前仅支持本机工作区全文搜索"
+                  : "在文件夹中搜索…"
+            }
+            disabled={!rootPath || isRemoteOrWsl}
             className="w-full bg-transparent text-sm text-zinc-200 outline-none placeholder:text-zinc-600"
           />
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
+        {isRemoteOrWsl && (
+          <p className="px-1 py-1 text-xs text-zinc-500">
+            暂不支持在 SSH / WSL 远程工作区中直接全文搜索。
+          </p>
+        )}
+        {error && (
+          <p className="break-words px-1 py-1 text-xs text-red-400">
+            搜索失败：{error}
+          </p>
+        )}
         {searching && <p className="px-1 py-1 text-xs text-zinc-500">搜索中…</p>}
-        {!searching && searched && hits.length === 0 && query.trim() && (
+        {!searching && !error && !isRemoteOrWsl && searched && hits.length === 0 && query.trim() && (
           <p className="px-1 py-1 text-xs text-zinc-500">无结果</p>
         )}
         {[...groups.entries()].map(([path, list]) => (
           <div key={path} className="mb-2">
             <p className="truncate px-1 py-0.5 text-[11px] text-zinc-500" title={path}>
-              {path.split("/").pop()}{" "}
+              {path.split(/[\\/]/).pop()}{" "}
               <span className="text-zinc-700">({list.length})</span>
             </p>
             {list.map((hit, i) => (

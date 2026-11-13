@@ -52,26 +52,34 @@ export function TitleBar({
 
   // 监听窗口最大化状态以切换最大化/还原图标
   useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | null = null;
     void getCurrentWindow()
       .isMaximized()
-      .then(setIsMaximized)
+      .then((max) => {
+        if (!disposed) setIsMaximized(max);
+      })
       .catch(() => {});
 
     void getCurrentWindow()
       .onResized(async () => {
         try {
           const max = await getCurrentWindow().isMaximized();
-          setIsMaximized(max);
+          if (!disposed) setIsMaximized(max);
         } catch {
           /* 忽略 */
         }
       })
       .then((fn) => {
-        unlisten = fn;
+        if (disposed) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
       });
 
     return () => {
+      disposed = true;
       unlisten?.();
     };
   }, []);
@@ -197,13 +205,22 @@ export function TitleBar({
     const root = explorerStore.getState().rootPath;
     if (root) {
       const name = prompt("请输入新建文件名称（如 main.rs 或 doc.md）：");
-      if (name && name.trim()) {
-        const cleanRoot = root.replace(/\\/g, "/");
-        const cleanPath = `${cleanRoot}/${name.trim()}`;
-        void filesApi.createFile(cleanPath).then(async () => {
-          await explorerStore.getState().refresh(root);
-          await tabsStore.getState().openFileByPath(cleanPath);
-        });
+      const trimmed = name?.trim();
+      if (trimmed) {
+        const sep =
+          root.endsWith("/") || root.endsWith("\\")
+            ? ""
+            : root.includes("\\")
+              ? "\\"
+              : "/";
+        const cleanPath = `${root}${sep}${trimmed}`;
+        void filesApi
+          .createFile(cleanPath)
+          .then(async () => {
+            await explorerStore.getState().refresh(root);
+            await tabsStore.getState().openFileByPath(cleanPath);
+          })
+          .catch((err) => alert(`新建文件失败：${String(err)}`));
       }
     } else {
       const id = `local://untitled-${Date.now()}.txt`;
@@ -230,12 +247,19 @@ export function TitleBar({
     const root = explorerStore.getState().rootPath;
     if (root) {
       const name = prompt("请输入新建文件夹名称：");
-      if (name && name.trim()) {
-        const cleanRoot = root.replace(/\\/g, "/");
-        const cleanPath = `${cleanRoot}/${name.trim()}`;
-        void filesApi.createDir(cleanPath).then(() => {
-          void explorerStore.getState().refresh(root);
-        });
+      const trimmed = name?.trim();
+      if (trimmed) {
+        const sep =
+          root.endsWith("/") || root.endsWith("\\")
+            ? ""
+            : root.includes("\\")
+              ? "\\"
+              : "/";
+        const cleanPath = `${root}${sep}${trimmed}`;
+        void filesApi
+          .createDir(cleanPath)
+          .then(() => explorerStore.getState().refresh(root))
+          .catch((err) => alert(`新建文件夹失败：${String(err)}`));
       }
     } else {
       alert("请先在资源管理器打开工作区文件夹");
