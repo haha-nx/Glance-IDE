@@ -10,9 +10,6 @@ use crate::commands::CmdError;
 use crate::filesystem::ResourceUri;
 use crate::AppState;
 
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 pub(super) fn decode_output(bytes: &[u8]) -> String {
     if bytes.len() >= 2
         && ((bytes[0] == 0xFF && bytes[1] == 0xFE)

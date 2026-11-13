@@ -68,7 +68,7 @@ jobs:
 
       - name: Ensure frontend dist placeholder exists
         shell: bash
-        run: mkdir -p dist && : > dist/index.html
+        run: mkdir -p dist && touch dist/index.html
 
       - name: Run Rust unit tests
         working-directory: src-tauri

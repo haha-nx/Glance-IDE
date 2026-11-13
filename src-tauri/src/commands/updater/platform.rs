@@ -10,6 +10,8 @@ use tokio::process::Command;
 use super::github::{
     resolve_update_cache_dir, validate_allowed_github_url, verify_path_in_update_cache,
 };
+#[cfg(target_os = "windows")]
+use super::types::{configure_background_cmd, CREATE_NO_WINDOW};
 use crate::app_services::transfer::reveal_local_path_sync;
 use crate::AppState;
 

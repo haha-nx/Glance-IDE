@@ -78,20 +78,36 @@ jobs:
         run: |
           TAG="${{ needs.prepare-release.outputs.tag }}"
           VER="${TAG#v}"
-          APP_PATH="$(find src-tauri/target -maxdepth 6 -type d -name 'Glance IDE.app' | head -n 1)"
+          APP_PATH="$(find src-tauri/target -path '*/bundle/macos/Glance IDE.app' -type d | head -n 1)"
           if [ -z "$APP_PATH" ]; then
             echo "Glance IDE.app not found"
             exit 1
           fi
+          echo "Found app bundle: $APP_PATH"
           bash scripts/fix-macos-bundle.sh "$APP_PATH"
           BUNDLE_DIR="$(dirname "$APP_PATH")"
           mkdir -p release-artifacts
           tar -C "$BUNDLE_DIR" -czf "release-artifacts/Glance.IDE_${VER}_universal.app.tar.gz" "Glance IDE.app"
           DMG_STAGING="$(mktemp -d)"
+          trap 'rm -rf "$DMG_STAGING"' EXIT
           cp -R "$APP_PATH" "$DMG_STAGING/"
           ln -sfn /Applications "$DMG_STAGING/Applications"
-          hdiutil create -volname "Glance IDE" -srcfolder "$DMG_STAGING" -ov -format UDZO "release-artifacts/Glance.IDE_${VER}_universal.dmg"
-          rm -rf "$DMG_STAGING"
+          DMG_OUT="release-artifacts/Glance.IDE_${VER}_universal.dmg"
+          rm -f "$DMG_OUT"
+          for attempt in 1 2 3 4 5; do
+            for vol in /Volumes/"Glance IDE"*; do
+              [ -e "$vol" ] && hdiutil detach "$vol" -force >/dev/null 2>&1 || true
+            done
+            if hdiutil create -volname "Glance IDE" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_OUT"; then
+              break
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "hdiutil create failed after 5 attempts"
+              exit 1
+            fi
+            echo "hdiutil create attempt $attempt failed; retrying in 3s..."
+            sleep 3
+          done
 
       - name: Upload macOS workflow artifacts
         uses: actions/upload-artifact@v4
