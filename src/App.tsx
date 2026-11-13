@@ -180,7 +180,7 @@ function useWorkspacePersistence({
                         const sub = p.replace(/^remote:\/\/[^/]+/, "");
                         finalP = `remote://${outcome.deviceIdentityId}${sub}`;
                       }
-                      await tabsStore.getState().openFileByPath(finalP);
+                      await tabsStore.getState().openFileByPath(finalP, { preserveExisting: true });
                     }
                     if (parsed.active) {
                       let finalActive = parsed.active;
@@ -224,7 +224,7 @@ function useWorkspacePersistence({
           const parsed = JSON.parse(tabsJson) as { paths?: string[]; active?: string };
           for (const p of parsed.paths ?? []) {
             if (!p.startsWith("remote://")) {
-              await tabsStore.getState().openFileByPath(p);
+              await tabsStore.getState().openFileByPath(p, { preserveExisting: true });
             }
           }
           if (parsed.active && !parsed.active.startsWith("remote://")) {

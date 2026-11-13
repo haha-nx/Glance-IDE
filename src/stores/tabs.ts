@@ -3,6 +3,7 @@ import type { FileEntryDto } from "../types/ipc";
 import { filesApi, FsError } from "../services/files";
 import { gitApi, type GitFileDiffDto, type GitFileDiffRequest } from "../services/git";
 import { getOrCreateModel, setModelValueQuiet, disposeModel, getModel, toModelUri } from "../lib/models";
+import { settingsStore } from "./settings";
 
 /**
  * 编辑器标签页状态（仅界面状态；权威文件状态在 Rust 端）。
@@ -60,6 +61,11 @@ export interface EditorColumn {
 
 export type SplitSide = "left" | "right" | "top" | "bottom";
 
+export interface OpenFileOptions {
+  /** 仅保留修改文件开关开启时是否保留当前已有标签（用于启动恢复工作区） */
+  preserveExisting?: boolean;
+}
+
 interface TabsState {
   tabs: EditorTab[];
   activeId: string | null;
@@ -74,8 +80,8 @@ interface TabsState {
   /** 待执行的编辑器定位（搜索跳转用） */
   pendingReveal: { uri: string; line: number } | null;
 
-  openFile(entry: FileEntryDto): Promise<void>;
-  openFileByPath(path: string): Promise<void>;
+  openFile(entry: FileEntryDto, options?: OpenFileOptions): Promise<void>;
+  openFileByPath(path: string, options?: OpenFileOptions): Promise<void>;
   openFileAtLine(path: string, line: number): Promise<void>;
   openGitDiff(params: { title: string; uriKey: string; request: GitFileDiffRequest }): Promise<void>;
   consumeReveal(): void;
@@ -216,6 +222,100 @@ function reconcile(s: GroupSlice): Partial<GroupSlice> | null {
   return { layout, groups, activeGroupId, activeId };
 }
 
+/** 寻找当前活动组内可替换的未修改标签：优先正在查看的未修改标签，否则最早打开的未修改标签 */
+function findReplaceableTabUri(
+  s: Pick<TabsState, "tabs" | "groups" | "activeGroupId">,
+): string | null {
+  const activeGroup = s.groups[s.activeGroupId];
+  const tabMap = new Map(s.tabs.map((t) => [t.uri, t]));
+  const candidates = activeGroup ? activeGroup.tabUris : s.tabs.map((t) => t.uri);
+
+  if (activeGroup?.activeUri) {
+    const activeTab = tabMap.get(activeGroup.activeUri);
+    if (activeTab && !activeTab.dirty) {
+      return activeTab.uri;
+    }
+  }
+  for (const uri of candidates) {
+    const tab = tabMap.get(uri);
+    if (tab && !tab.dirty) {
+      return tab.uri;
+    }
+  }
+  return null;
+}
+
+/** 统一提交新开/重载标签，并在「仅保留修改文件」开启时替换同组未修改标签 */
+function applyOpenedTab(
+  s: TabsState,
+  newTab: EditorTab,
+  allowReplace: boolean,
+): { patch: Partial<TabsState>; disposedUri: string | null } {
+  const alreadyOpen = s.tabs.some((t) => t.uri === newTab.uri);
+  const activeGroup = s.groups[s.activeGroupId];
+  const groups = { ...s.groups };
+
+  if (alreadyOpen) {
+    const tabs = s.tabs.map((t) => (t.uri === newTab.uri ? newTab : t));
+    if (activeGroup) {
+      const tabUris = activeGroup.tabUris.includes(newTab.uri)
+        ? activeGroup.tabUris
+        : [...activeGroup.tabUris, newTab.uri];
+      groups[s.activeGroupId] = { ...activeGroup, tabUris, activeUri: newTab.uri };
+    }
+    return { patch: { tabs, groups, activeId: newTab.uri }, disposedUri: null };
+  }
+
+  const replaceUri =
+    allowReplace && settingsStore.getState().keepOnlyModifiedTabs
+      ? findReplaceableTabUri(s)
+      : null;
+
+  if (replaceUri) {
+    const usedElsewhere = Object.entries(s.groups).some(
+      ([gid, g]) => gid !== s.activeGroupId && g.tabUris.includes(replaceUri),
+    );
+    const tabs = usedElsewhere
+      ? [...s.tabs, newTab]
+      : s.tabs.map((t) => (t.uri === replaceUri ? newTab : t));
+    if (activeGroup) {
+      const tabUris = activeGroup.tabUris.includes(replaceUri)
+        ? activeGroup.tabUris.map((u) => (u === replaceUri ? newTab.uri : u))
+        : [...activeGroup.tabUris, newTab.uri];
+      groups[s.activeGroupId] = { ...activeGroup, tabUris, activeUri: newTab.uri };
+    }
+    return {
+      patch: { tabs, groups, activeId: newTab.uri },
+      disposedUri: usedElsewhere ? null : replaceUri,
+    };
+  }
+
+  const tabs = [...s.tabs, newTab];
+  if (activeGroup) {
+    const tabUris = activeGroup.tabUris.includes(newTab.uri)
+      ? activeGroup.tabUris
+      : [...activeGroup.tabUris, newTab.uri];
+    groups[s.activeGroupId] = { ...activeGroup, tabUris, activeUri: newTab.uri };
+  }
+  return { patch: { tabs, groups, activeId: newTab.uri }, disposedUri: null };
+}
+
+function commitOpenedTab(
+  setFn: (fn: (s: TabsState) => Partial<TabsState>) => void,
+  tab: EditorTab,
+  allowReplace: boolean,
+): void {
+  let disposedUri: string | null = null;
+  setFn((s) => {
+    const res = applyOpenedTab(s, tab, allowReplace);
+    disposedUri = res.disposedUri;
+    return res.patch;
+  });
+  if (disposedUri) {
+    disposeModel(disposedUri);
+  }
+}
+
 export const tabsStore = create<TabsState>()((set, get) => ({
   tabs: [],
   activeId: null,
@@ -227,7 +327,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
   saving: false,
   pendingReveal: null,
 
-  openFile: async (entry) => {
+  openFile: async (entry, options) => {
     if (entry.kind === "dir") return;
     const uri = toModelUri(entry.path);
     const existing = get().tabs.find((t) => t.uri === uri);
@@ -237,12 +337,10 @@ export const tabsStore = create<TabsState>()((set, get) => ({
       set({ activeId: uri });
       return;
     }
+    const allowReplace = !options?.preserveExisting;
     try {
       const tab = await readFileIntoTab(entry.path, uri);
-      set((s) => ({
-        tabs: existing ? s.tabs.map((t) => (t.uri === uri ? tab : t)) : [...s.tabs, tab],
-        activeId: uri,
-      }));
+      commitOpenedTab(set, tab, allowReplace);
     } catch (err) {
       const message = err instanceof FsError ? err.shape.message : String(err);
       const errTab: EditorTab = {
@@ -254,21 +352,21 @@ export const tabsStore = create<TabsState>()((set, get) => ({
         readonly: true,
         error: message,
       };
-      set((s) => ({
-        tabs: existing ? s.tabs.map((t) => (t.uri === uri ? errTab : t)) : [...s.tabs, errTab],
-        activeId: uri,
-      }));
+      commitOpenedTab(set, errTab, allowReplace);
     }
   },
 
-  openFileByPath: async (path) => {
-    await get().openFile({
-      name: path.split("/").pop() ?? path,
-      path,
-      kind: "file",
-      size: 0,
-      modifiedMs: 0,
-    });
+  openFileByPath: async (path, options) => {
+    await get().openFile(
+      {
+        name: path.split("/").pop() ?? path,
+        path,
+        kind: "file",
+        size: 0,
+        modifiedMs: 0,
+      },
+      options,
+    );
   },
 
   openFileAtLine: async (path, line) => {
@@ -279,7 +377,6 @@ export const tabsStore = create<TabsState>()((set, get) => ({
 
   openGitDiff: async ({ title, uriKey, request }) => {
     const uri = `gitdiff://${uriKey}`;
-    const existing = get().tabs.find((t) => t.uri === uri);
     try {
       const data = await gitApi.fileDiff(request);
       const tab: EditorTab = {
@@ -296,10 +393,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
           data,
         },
       };
-      set((s) => ({
-        tabs: existing ? s.tabs.map((t) => (t.uri === uri ? tab : t)) : [...s.tabs, tab],
-        activeId: uri,
-      }));
+      commitOpenedTab(set, tab, true);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const errTab: EditorTab = {
@@ -311,10 +405,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
         readonly: true,
         error: `加载文件对比失败：${message}`,
       };
-      set((s) => ({
-        tabs: existing ? s.tabs.map((t) => (t.uri === uri ? errTab : t)) : [...s.tabs, errTab],
-        activeId: uri,
-      }));
+      commitOpenedTab(set, errTab, true);
     }
   },
 

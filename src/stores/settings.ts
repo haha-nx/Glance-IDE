@@ -57,6 +57,8 @@ export interface AppSettings {
   theme: AppTheme;
   /** 是否在代码编辑器中显示语法 / LSP 报错与诊断波浪线（默认关闭） */
   showEditorDiagnostics: boolean;
+  /** 是否在打开新文件时优先替换未修改标签，仅保留已修改文件（默认关闭） */
+  keepOnlyModifiedTabs: boolean;
   /** 是否在启动时自动检测更新（默认关闭） */
   autoCheckUpdate: boolean;
   /** 检测到新版本时是否自动下载安装包（默认关闭） */
@@ -72,6 +74,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 13,
   theme: "dark",
   showEditorDiagnostics: false,
+  keepOnlyModifiedTabs: false,
   autoCheckUpdate: false,
   autoDownloadUpdate: false,
   sidebarWidth: 288,
@@ -101,6 +104,9 @@ function normalizeSettings(raw: Partial<AppSettings> | null | undefined): AppSet
     theme,
     showEditorDiagnostics: Boolean(
       raw?.showEditorDiagnostics ?? DEFAULT_SETTINGS.showEditorDiagnostics,
+    ),
+    keepOnlyModifiedTabs: Boolean(
+      raw?.keepOnlyModifiedTabs ?? DEFAULT_SETTINGS.keepOnlyModifiedTabs,
     ),
     autoCheckUpdate: Boolean(raw?.autoCheckUpdate ?? DEFAULT_SETTINGS.autoCheckUpdate),
     autoDownloadUpdate: Boolean(raw?.autoDownloadUpdate ?? DEFAULT_SETTINGS.autoDownloadUpdate),
@@ -174,6 +180,7 @@ export const settingsStore = create<SettingsState>()((set, get) => ({
       fontSize: patch.fontSize ?? cur.fontSize,
       theme: patch.theme ?? cur.theme,
       showEditorDiagnostics: patch.showEditorDiagnostics ?? cur.showEditorDiagnostics,
+      keepOnlyModifiedTabs: patch.keepOnlyModifiedTabs ?? cur.keepOnlyModifiedTabs,
       autoCheckUpdate: patch.autoCheckUpdate ?? cur.autoCheckUpdate,
       autoDownloadUpdate: patch.autoDownloadUpdate ?? cur.autoDownloadUpdate,
       sidebarWidth: patch.sidebarWidth ?? cur.sidebarWidth,
@@ -211,6 +218,7 @@ export const settingsStore = create<SettingsState>()((set, get) => ({
         fontSize: s.fontSize,
         theme: s.theme,
         showEditorDiagnostics: s.showEditorDiagnostics,
+        keepOnlyModifiedTabs: s.keepOnlyModifiedTabs,
         autoCheckUpdate: s.autoCheckUpdate,
         autoDownloadUpdate: s.autoDownloadUpdate,
         sidebarWidth: s.sidebarWidth,
@@ -256,6 +264,7 @@ if (typeof window !== "undefined") {
           fontSize: incoming.fontSize,
           theme: incoming.theme,
           showEditorDiagnostics: incoming.showEditorDiagnostics,
+          keepOnlyModifiedTabs: incoming.keepOnlyModifiedTabs,
           autoCheckUpdate: incoming.autoCheckUpdate,
           autoDownloadUpdate: incoming.autoDownloadUpdate,
           sidebarWidth: cur.sidebarWidth,

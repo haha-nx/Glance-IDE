@@ -69,6 +69,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
   const fontSize = settingsStore((s) => s.fontSize);
   const theme = settingsStore((s) => s.theme);
   const showEditorDiagnostics = settingsStore((s) => s.showEditorDiagnostics);
+  const keepOnlyModifiedTabs = settingsStore((s) => s.keepOnlyModifiedTabs);
   const autoCheckUpdate = settingsStore((s) => s.autoCheckUpdate);
   const autoDownloadUpdate = settingsStore((s) => s.autoDownloadUpdate);
   const updateSettings = settingsStore((s) => s.updateSettings);
@@ -302,9 +303,9 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
           {section === "editor" && (
             <>
               <section className="space-y-1">
-                <h3 className="text-xs font-semibold text-zinc-100">诊断与报错提示</h3>
+                <h3 className="text-xs font-semibold text-zinc-100">诊断与标签行为</h3>
                 <p className="text-[11px] text-zinc-400">
-                  控制代码编辑器内语法检查与语言服务器（LSP）诊断报错的显示策略。
+                  控制代码编辑器内语法检查报错提示与文件标签页的打开替换策略。
                 </p>
               </section>
 
@@ -320,6 +321,20 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                     checked={showEditorDiagnostics}
                     onChange={(v) => updateSettings({ showEditorDiagnostics: v })}
                     label="报错显示"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between gap-4 px-3.5 py-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-zinc-100">仅保留修改文件</div>
+                    <p className="mt-0.5 text-[11px] text-zinc-400">
+                      默认关闭。开启后打开新文件时优先替换当前标签栏中未修改（无未保存改动）的标签页，防止打开过多标签；已修改的文件始终保留。
+                    </p>
+                  </div>
+                  <ToggleSwitch
+                    checked={keepOnlyModifiedTabs}
+                    onChange={(v) => updateSettings({ keepOnlyModifiedTabs: v })}
+                    label="仅保留修改文件"
                   />
                 </div>
               </section>
@@ -568,6 +583,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                   <li>界面主题：{APP_THEMES.find((t) => t.id === theme)?.name ?? theme}</li>
                   <li>统一字号：{fontSize} px（编辑器 / Markdown / 终端）</li>
                   <li>编辑器报错显示：{showEditorDiagnostics ? "已开启" : "已关闭（默认）"}</li>
+                  <li>仅保留修改文件：{keepOnlyModifiedTabs ? "已开启" : "已关闭（默认）"}</li>
                   <li>自动检测更新：{autoCheckUpdate ? "已开启" : "已关闭（默认）"}</li>
                   <li>自动下载安装包：{autoDownloadUpdate ? "已开启" : "已关闭（默认）"}</li>
                   <li>凭据存储：系统安全钥匙串（Windows Credential Manager / macOS Keychain）</li>

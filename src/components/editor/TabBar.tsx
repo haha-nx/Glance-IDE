@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { tabsStore } from "../../stores/tabs";
 import { tabDragStore, type TabDragState } from "../../stores/tabDrag";
 import { IconClose, IconWarning } from "../../components/common/icons";
@@ -108,64 +108,161 @@ export function TabBar({ groupId, actions }: TabBarProps) {
     .map((uri) => allTabs.find((t) => t.uri === uri))
     .filter((t): t is NonNullable<typeof t> => !!t);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [thumb, setThumb] = useState<{ visible: boolean; widthPct: number; leftPct: number }>({
+    visible: false,
+    widthPct: 100,
+    leftPct: 0,
+  });
+
+  const syncScrollThumb = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const { scrollWidth, clientWidth, scrollLeft } = el;
+    if (scrollWidth <= clientWidth + 1 || clientWidth <= 0) {
+      setThumb((prev) => (prev.visible ? { visible: false, widthPct: 100, leftPct: 0 } : prev));
+      return;
+    }
+    const widthPct = Math.max(8, (clientWidth / scrollWidth) * 100);
+    const maxScroll = Math.max(1, scrollWidth - clientWidth);
+    const progress = Math.max(0, Math.min(1, scrollLeft / maxScroll));
+    const leftPct = progress * (100 - widthPct);
+    setThumb((prev) => {
+      if (
+        prev.visible &&
+        Math.abs(prev.widthPct - widthPct) < 0.05 &&
+        Math.abs(prev.leftPct - leftPct) < 0.05
+      ) {
+        return prev;
+      }
+      return { visible: true, widthPct, leftPct };
+    });
+  }, []);
+
+  // 禁止原生宽滚动条、纵轴滚动条与指针拖拽滑块：仅响应鼠标滚轮横向滚动
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth + 1) return;
+      const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (raw === 0) return;
+      e.preventDefault();
+      const scale = e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? el.clientWidth * 0.8 : 1;
+      el.scrollLeft += raw * scale;
+      syncScrollThumb();
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    const ro = new ResizeObserver(() => syncScrollThumb());
+    ro.observe(el);
+    syncScrollThumb();
+
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      ro.disconnect();
+    };
+  }, [syncScrollThumb]);
+
+  const tabSignature = tabs.map((t) => `${t.uri}:${t.name}`).join("\0");
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (group?.activeUri) {
+      const tabEl = Array.from(el.querySelectorAll<HTMLElement>("[data-tab-uri]")).find(
+        (node) => node.dataset.tabUri === group.activeUri,
+      );
+      if (tabEl) {
+        const elRect = el.getBoundingClientRect();
+        const tabRect = tabEl.getBoundingClientRect();
+        if (tabRect.left < elRect.left) {
+          el.scrollLeft += tabRect.left - elRect.left;
+        } else if (tabRect.right > elRect.right) {
+          el.scrollLeft += tabRect.right - elRect.right;
+        }
+      }
+    }
+    syncScrollThumb();
+  }, [group?.activeUri, tabSignature, syncScrollThumb]);
+
   return (
-    <div className={`flex h-9 shrink-0 items-stretch border-b border-zinc-800 ${isActiveGroup ? "bg-zinc-950" : "bg-[var(--glance-bg-inactive)]"}`}>
-      <div
-        data-tabbar-group={groupId}
-        className={`flex min-w-0 flex-1 items-stretch overflow-x-auto ${dropTarget ? "bg-sky-500/10" : ""}`}
-      >
-        {tabs.map((tab, i) => {
-          const isActive = group?.activeUri === tab.uri;
-          const indicator =
-            dropTarget && dropTarget.index === i
-              ? "shadow-[inset_2px_0_0_#38bdf8]"
-              : dropTarget && dropTarget.index === tabs.length && i === tabs.length - 1
-                ? "shadow-[inset_-2px_0_0_#38bdf8]"
-                : "";
-          return (
-            <div
-              key={tab.uri}
-              data-tab-uri={tab.uri}
-              onPointerDown={(e) => onTabPointerDown(e, tab.uri, groupId, tab.name)}
-              onAuxClick={(e) => {
-                if (e.button === 1) closeInGroup(groupId, tab.uri);
-              }}
-              title={tab.path}
-              className={`group relative flex min-w-28 max-w-64 shrink-0 cursor-pointer items-center gap-1.5 border-r border-zinc-800 px-3 text-[13px] ${indicator} ${
-                isActive
-                  ? `bg-zinc-900 ${isActiveGroup ? "text-zinc-100" : "text-zinc-400"}`
-                  : "text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              {isActive && isActiveGroup && <span className="absolute inset-x-0 top-0 h-px bg-sky-500" />}
-              {tab.error ? (
-                <span className="text-red-400">
-                  <IconWarning size={14} />
-                </span>
-              ) : tab.diff ? (
-                <span className="shrink-0 font-mono text-[11px] text-sky-400" title="文件对比">
-                  ⇄
-                </span>
-              ) : (
-                <span className={`h-2 w-2 shrink-0 rounded-full ${tab.dirty ? "bg-amber-400" : "bg-transparent"}`} />
-              )}
-              <span className="truncate">{tab.name}</span>
-              <button
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeInGroup(groupId, tab.uri);
+    <div className={`flex h-9 shrink-0 items-stretch overflow-hidden border-b border-zinc-800 ${isActiveGroup ? "bg-zinc-950" : "bg-[var(--glance-bg-inactive)]"}`}>
+      <div className="relative min-w-0 flex-1 overflow-hidden">
+        <div
+          ref={scrollRef}
+          data-tabbar-group={groupId}
+          onScroll={syncScrollThumb}
+          className={`flex h-full w-full items-stretch overflow-x-hidden overflow-y-hidden ${dropTarget ? "bg-sky-500/10" : ""}`}
+        >
+          {tabs.map((tab, i) => {
+            const isActive = group?.activeUri === tab.uri;
+            const indicator =
+              dropTarget && dropTarget.index === i
+                ? "shadow-[inset_2px_0_0_#38bdf8]"
+                : dropTarget && dropTarget.index === tabs.length && i === tabs.length - 1
+                  ? "shadow-[inset_-2px_0_0_#38bdf8]"
+                  : "";
+            return (
+              <div
+                key={tab.uri}
+                data-tab-uri={tab.uri}
+                onPointerDown={(e) => onTabPointerDown(e, tab.uri, groupId, tab.name)}
+                onAuxClick={(e) => {
+                  if (e.button === 1) closeInGroup(groupId, tab.uri);
                 }}
-                className={`ml-auto rounded px-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 ${
-                  isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                title={tab.path}
+                className={`group relative flex min-w-28 max-w-64 shrink-0 cursor-pointer items-center gap-1.5 border-r border-zinc-800 px-3 text-[13px] ${indicator} ${
+                  isActive
+                    ? `bg-zinc-900 ${isActiveGroup ? "text-zinc-100" : "text-zinc-400"}`
+                    : "text-zinc-500 hover:text-zinc-300"
                 }`}
-                title="关闭"
               >
-                <IconClose size={12} />
-              </button>
-            </div>
-          );
-        })}
+                {isActive && isActiveGroup && <span className="absolute inset-x-0 top-0 h-px bg-sky-500" />}
+                {tab.error ? (
+                  <span className="text-red-400">
+                    <IconWarning size={14} />
+                  </span>
+                ) : tab.diff ? (
+                  <span className="shrink-0 font-mono text-[11px] text-sky-400" title="文件对比">
+                    ⇄
+                  </span>
+                ) : (
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${tab.dirty ? "bg-amber-400" : "bg-transparent"}`} />
+                )}
+                <span className="truncate">{tab.name}</span>
+                <button
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeInGroup(groupId, tab.uri);
+                  }}
+                  className={`ml-auto rounded px-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 ${
+                    isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                  }`}
+                  title="关闭"
+                >
+                  <IconClose size={12} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {thumb.visible && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px]"
+          >
+            <div
+              className="absolute inset-y-0 rounded-full opacity-80"
+              style={{
+                left: `${thumb.leftPct}%`,
+                width: `${thumb.widthPct}%`,
+                backgroundColor: "var(--glance-scrollbar-hover)",
+              }}
+            />
+          </div>
+        )}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-1 border-l border-zinc-800 px-2">{actions}</div>}
     </div>
