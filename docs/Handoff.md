@@ -1,6 +1,6 @@
 # Glance IDE — 项目交接与当前进度文档（Handoff）
 
-> 基线版本：`v0.1.3`（包含 SSH/WSL 文件与文件夹实时进度传输、完成后 5 秒自动隐藏、进度流式无感原地/静默更新、项目交接与开发规范整合）
+> 基线版本：`v0.1.6`（包含 `v0.1.4` 多窗口隔离与传输调优、`v0.1.5` 编辑器报错显示开关、`v0.1.6` 标签栏优化及全栈 P0–P2 稳定性/安全性/性能重构与 CI 建设）
 > 更新日期：2026-11-13 · 适用平台：Windows / macOS（兼顾 Linux AppImage）
 > 开发规范与界面按钮规范已整合至 **[docs/开发规范.md](开发规范.md)**。
 
@@ -60,8 +60,11 @@ Glance IDE 是本地/远程一体化桌面开发工作台。以本机为控制�
 | M6 远程语言智能（LSP） | 已完成（已发布） | `clangd` / `pylsp` 只读探测、SSH 无 PTY `exec` 通道 + Rust JSON-RPC 组帧 + Monaco 补全/悬停/定义/诊断 |
 | M7 Git 与工作树（Worktrees） | 已完成（已发布） | 更改/图形两栏、分支管理、Sync、提交/推送、SVG 提交图谱、Worktree CRUD、Monaco Diff（含远端提交文件对比） |
 | M8 双端窗口与 UI 规范统一 | 已完成（已发布 `v0.1.2`） | Windows 无边框自绘单行暗色标题栏；macOS 原生 Overlay 标题栏与系统顶部 `NSMenu`；统一按钮交互与 250ms 全局 Tooltip |
-| **文件/文件夹上传下载（v0.1.3）** | **已编码实现，待实机 SSH/WSL 联调** | 256 KiB 分块流式传输、独立 SFTP 传输通道、实时进度条队列（完成/取消 5s 自动隐藏）、OS 拖拽上传、右键/工具栏入口、冲突覆盖/跳过与取消清理；已通过 Rust 本地测试，待连真实 SSH/WSL 实测 |
-| **无感原地/静默更新（v0.1.3）** | **已编码实现，待 CI 实包跨版本实测** | GitHub Releases 进度流下载（存应用缓存）、取消下载、macOS 原地替换 `.app` 重开、Windows NSIS/MSI 后台静默覆盖重启、未保存标签守卫、`release.yml` 双端流水线 |
+| **文件/文件夹上传下载（v0.1.3 / v0.1.6 并发升级）** | **已编码实现 + 并发升级，待实机 SSH/WSL 联调** | 256 KiB 分块流式传输、独立 SFTP 传输通道池（多文件扩展至最多 4 并发 Worker）、实时进度条队列（完成/取消 5s 自动隐藏）、OS 拖拽上传、冲突覆盖/跳过与取消清理；已通过 Rust 本地测试，待连真实 SSH/WSL 实测 |
+| **无感原地/静默更新（v0.1.3 / v0.1.6 安全加固）** | **已编码实现 + 摘要/包体校验加固，待 CI 实包跨版本实测** | GitHub Releases 进度流下载（存应用缓存）、`SHA256SUMS.txt` 回退摘要校验、macOS 仅移除 `com.apple.quarantine` 并校验 Bundle ID 与代码签名、Windows NSIS/MSI 静默覆盖重启、未保存标签守卫、`release.yml` `--draft` 双端校验流水线 |
+| **多窗口隔离与目录递归同步（v0.1.4）** | **已发布（`v0.1.4`）** | 原生菜单聚焦窗路由、各窗布局尺寸独立、SSH 断线按设备定位唯一活跃窗提醒；命令/焦点触发可见目录层级递归并行刷新 |
+| **编辑器设置与标签体验（v0.1.5–v0.1.6）** | **已完成** | 「报错显示」开关（默认关闭）、「仅保留修改文件」标签替换开关（默认关闭）；标签栏改为 3px 细滚轮横向滚动条并禁纵轴滚动条 |
+| **全栈 P0–P2 重构与 CI 建设（v0.1.6）** | **已完成（待发版验证）** | 退出前会话回收、最后终端关闭联动折叠底栏、SSH 凭据/LSP 隔离与通道防丢包；流式全文搜索、Vite 分块 + `React.lazy` 懒加载；Rust 轮转日志、前后端大文件模块化拆解、Toast/Modal 替代 `alert`/`prompt`、浅色对比度修复、历史集成测试修复与三端 PR CI |
 
 ---
 
@@ -69,23 +72,25 @@ Glance IDE 是本地/远程一体化桌面开发工作台。以本机为控制�
 
 ### 4.1 编辑器与工作区
 
-- Monaco 多标签编辑，按「列 × 行」网格的多分组分屏，分隔条可拖拽调权
+- Monaco 多标签编辑，按「列 × 行」网格的多分组分屏，分隔条可拖拽调权；顶部标签栏采用 3px 细滚轮横向滚动条（禁用原生宽滚动条、纵轴滚动条及指针拖拽）
+- 标签策略：设置内提供「仅保留修改文件」开关（默认关闭），开启后新开文件优先替换当前分组内的未修改标签，防止标签栏无限膨胀
 - 标签拖拽：跨分组移动、拖到编辑区四边拆分新分组
 - 保存冲突检测（`mtime`）、原子写、路径穿越防护
+- 报错诊断开关：设置内提供「报错显示」开关（默认关闭），开启时启用 Monaco 内置校验及远程 LSP 诊断标记
 - Markdown 所见即所得（Typora 风格）：原地编辑、表格行列调整、大纲、右键菜单、`document.execCommand` 原生撤销
-- 全局搜索：中文高亮偏移按 Unicode 标量计算
+- 全局搜索：前端按 Unicode 标量计算中文高亮偏移，后端 `search.rs` 使用 `BufReader` 逐行流式读取（4KB 二进制 `\0` 嗅探、64KB 超长行跳过、ASCII 零分配大小写匹配与复用小写缓冲）
 - 问题面板：Problem Matcher（`gcc`/`clang`/`python`）→ 点击跳转源码位置
-- 工作区/标签/`ui_state` 持久化；启动自动恢复
+- 工作区/标签/`ui_state` 持久化；启动自动恢复（逻辑已抽离至 `hooks/useWorkspacePersistence.ts`）
 
 ### 4.2 资源管理器与文件传输
 
 - 本地 / `remote://` / `wsl://` 三类根目录统一懒加载（含悬空符号链接安全展示与安全删除）
-- 新建文件/文件夹（统一走 `joinChildPath`，修复根目录双斜杠）、重命名、删除、刷新、空白处/条目右键菜单
-- 修复 `explorerStore.parentOf` 对 `remote://uuid/`、`wsl://distro/` 根子项及 Windows `\` 分隔符的父路径解析
+- 新建文件/文件夹（使用应用内 `Modal` 替代原生 `prompt()` 并统一走 `joinChildPath`）、重命名、删除（统一走 `DangerButton` 确认）、刷新、空白处/条目右键菜单
+- 多源自动同步：按展开层级递归并行刷新，终端命令提交及窗口聚焦后触发节流刷新，解决多级目录增删文件不更新问题
 - 远程目录缓存按 `device_identity_id` 隔离，会话重连后自动失效重载
-- **文件与文件夹传输（v0.1.3）**：
+- **文件与文件夹传输（v0.1.3 + v0.1.6 并发升级）**：
   - 入口：资源管理器顶部工具栏（上传文件/上传文件夹）、节点与空白区右键菜单（上传到当前/所在目录、下载文件/文件夹）、系统文件管理器直接拖拽入资源管理器（通过 Tauri `onDragDropEvent` + DPR 换算定位具体目录高亮）
-  - 后端：`app_services/transfer.rs` + `commands/transfer.rs`，支持目录递归预扫描（空目录、0 字节文件、跳过目录符号链接与悬空链接、禁止本地自包含拷贝）、256 KiB 分块流式拷贝、80ms 节流 `Channel` 进度推送、取消立即清理当前未完成半成品文件
+  - 后端：`app_services/transfer/`（已拆分为 `mod.rs` / `types.rs` / `scanner.rs` / `runner.rs`）+ `commands/transfer.rs`；支持目录递归预扫描（空目录、0 字节文件、跳过目录符号链接与悬空链接、禁止本地自包含拷贝）、256 KiB 分块流式拷贝、多文件任务打开最多 `CONCURRENT_FILE_WORKERS = 4` 条独立 SFTP 通道并由 `JoinSet` 并发执行、原子计数器 `SharedProgress` + 80ms 节流 `Channel` 进度推送、失败或取消立即中止关联 Worker 并 `cleanup_partial`
   - 冲突处理：传输前调用 `check_transfer_conflicts` 预检，弹窗提供「覆盖同名项 / 跳过已存在 / 取消」
   - 进度呈现：底部可折叠 `TransferQueuePanel`（含速度、已传/总大小、百分比、取消、完成后在 Finder/资源管理器中定位，完成/取消项 5 秒后自动移除并在队列为空时隐藏窗口，失败项保留以便查看错误）与 `StatusBar` 实时传输汇总徽标
 
@@ -110,8 +115,9 @@ Glance IDE 是本地/远程一体化桌面开发工作台。以本机为控制�
 
 - 底部面板：终端 / 任务 / 问题 三个页签
 - 终端类型：本机、SSH 远程、WSL（WSL 仅 Windows）；按当前工作区上下文自动选择
-- 每个窗格独立标签栏，支持连续分屏、拖拽跨窗格重排、标签拖到窗格边缘拆分
+- 每个窗格独立标签栏，支持连续分屏、拖拽跨窗格重排、标签拖到窗格边缘拆分；仅剩最后一个终端关闭时销毁会话并自动关闭下边栏
 - 终端最大化/还原；底栏高度与侧边栏宽度可拖拽并持久化
+- 通道关闭采用 `close_flag` + `Notify` 防高吞吐背压丢包，进程退出时协调回收避免句柄泄漏
 - Windows：`powershell.exe`，管道 + `CREATE_NO_WINDOW`，`\r` 自动补 `\n`
 - macOS/Linux：`$SHELL` 经真实 PTY（`openpty` + `setsid` + `TIOCSCTTY`），`TIOCSWINSZ` 同步窗口尺寸
 
@@ -124,27 +130,30 @@ Glance IDE 是本地/远程一体化桌面开发工作台。以本机为控制�
 - 点击连接：**命中已保存配置（host + port 一致）→ 直接在当前窗口发起连接**；未保存过 → 跳到远程面板并预填 IP/端口打开新建配置
 - 首次扫描兜底：等待本机网段探测落定、使用真实网段；若首次零结果自动重试一次（兼容 macOS 首次局域网权限静默拦截与 ARP 冷启动）
 
-### 4.7 设置与无感更新
+### 4.7 设置、无障碍规范与无感更新
 
-- 四套主题（`dark` / `midnight` / `nord` / `light`），全界面与 Monaco/终端同步
-- 字号 10–24px；侧边栏宽度、底栏高度持久化
+- 四套主题（`dark` / `midnight` / `nord` / `light`），全界面与 Monaco/终端同步；修复 `light` 主题下红/黄/绿状态色与搜索高亮的视觉对比度
+- 字号 10–24px；侧边栏宽度、底栏高度按窗口持久化
+- 交互一致性：全局引入 `ToastHost`（`stores/toast.ts`）与 `invokeIpc<T>`（`lib/ipc.ts`），移除全项目阻塞式原生 `alert()`/`prompt()`；`Modal` 统一提供 `role="dialog"`、`aria-modal="true"`、`aria-labelledby` 与 `Escape` 键关闭支持
 - GitHub Releases 版本检测与带进度流下载（「自动检测」「自动下载」默认关闭）：
   - 更新包缓存在 `app_cache_dir/updates` 并清理旧包，不再污染 `~/Downloads`
+  - 校验机制：优先验证 Release API 返回的 `asset.digest`，若未提供则回退拉取同版本 `SHA256SUMS.txt` 校验 SHA-256 摘要
   - 实时进度条 + 速率展示 + 随时取消（`cancel_update_download`）
   - **一键重启更新（`apply_update_and_restart`）**：
-    - macOS：优先 `.app.tar.gz`/`.app.zip`，回退静默挂载 `.dmg` → 预先校验并暂存 `.app`、清除隔离属性 → 脱离式脚本等待退出后原子替换目标 `.app` 并重开
+    - macOS：优先 `.app.tar.gz`/`.app.zip`，回退静默挂载 `.dmg` → 校验 `CFBundleIdentifier` 等于 `"com.glance.ide"` 与 `Contents/MacOS` 目录、存在签名时运行 `codesign --verify --deep --strict`、仅精准移除 `com.apple.quarantine` 属性 → 脱离式脚本等待退出后原子替换目标 `.app` 并重开
     - Windows：优先 NSIS `-setup.exe`（`/S /D=$installDir`），回退 `.msi`（`/passive /norestart`）→ UTF-8 BOM PowerShell 后台静默覆盖并重启
     - Linux：AppImage 就地替换并重开，其余格式回退系统打开
-  - 重启更新前统一触发未保存标签守卫（保存/丢弃/取消），再调用 `shutdown_runtime_sessions` 优雅断开 SSH/终端/LSP/传输任务
-- 关于页：版本、平台、凭据存储位置说明
+  - 重启更新与退出应用前均触发未保存标签守卫，并先调用 `shutdown_runtime_sessions_async` 优雅断开 SSH/终端/LSP/传输任务
+- 关于页：版本、平台、凭据存储位置及当前关键配置摘要说明
 
 ### 4.8 多窗口与会话生命周期
 
-- `文件 → 新建窗口` 打开全新空白工作台（不继承主窗口工作区/标签/SSH 环境）
+- `文件 → 新建窗口` 打开全新空白工作台（不继承主窗口工作区/标签/SSH 环境）；原生菜单命令仅投递至当前焦点窗口，各窗口侧栏/底栏尺寸独立
 - 新窗口参数：`?open_folder=`、`?connect_ssh=`、`?connect_wsl=`
-- 非最后窗口关闭不退出进程；最后一个窗口关闭才退出
-- SSH 会话掉线监控：每 2s 探测传输状态，设备关机/断网时弹窗「重新连接 / 断开连接」
-- 僵尸会话自动清理；按设备身份路由到最新活跃会话
+- 非最后窗口关闭不退出进程；最后一个窗口关闭先异步清理活跃会话再退出
+- SSH 凭据隔离：密码（`glance://profile/`）与私钥口令（`glance://keypass/`）严格隔离存储，禁止跨认证模式串用
+- SSH 会话掉线监控：每 2s 探测传输状态，设备关机/断网时仅向关联且当前活跃的唯一窗口弹窗「重新连接 / 断开连接」，任一窗口重连成功后自动关闭其他窗弹窗
+- 僵尸会话通过 watchdog 安全回收（不在只读列举路径静默删表项）；按设备身份路由到最新活跃会话
 
 ### 4.9 远程语言智能
 
@@ -227,24 +236,31 @@ export PATH="$HOME/tools/nodejs/bin:$HOME/.cargo/bin:$PATH"
 
 npm install
 npm run typecheck    # tsc --noEmit
-npm run build        # tsc && vite build
+npm run build        # tsc && vite build（启用 Monaco/xterm/markdown 手动分块）
+npm run check        # tsc --noEmit && vite build（CI 前端标准检查）
 npm run tauri dev    # 桌面开发模式（macOS 通过 dev-runner.sh 自动 ad-hoc 签名）
 npm run tauri build  # 发布构建（macOS 后必须跑 bash scripts/fix-macos-bundle.sh）
 ```
 
-### 7.2 CI 自动发布（`.github/workflows/release.yml`）
+### 7.2 CI 与自动发布
 
-- 触发条件：推送 `v*` Tag 或手动 `workflow_dispatch`。
-- `build-macos`：构建 universal `.app` → 执行 `scripts/fix-macos-bundle.sh` → 打出修复后的 `.app.tar.gz` 与 `.dmg` 上传 GitHub Release。
-- `build-windows`：在 `windows-latest` 构建并上传 `*-setup.exe` 与 `*.msi` 至同一 Release。
+- **PR / Push CI（`.github/workflows/ci.yml`）**：
+  - `frontend` 作业：`ubuntu-latest` 运行 `npm ci` + `npm run check`。
+  - `rust` 作业：在 `ubuntu-latest`、`macos-latest`、`windows-latest` 三端矩阵运行 `cargo test --lib`、`cargo check --tests` 与 `cargo clippy --all-targets`。
+- **自动发布（`.github/workflows/release.yml`）**：
+  - 触发条件：推送 `v*` Tag 或手动 `workflow_dispatch`。
+  - `prepare-release`：提取 `CHANGELOG.md` 对应版本说明并创建 `--draft` 草稿 Release。
+  - `build-macos`：构建 universal `.app`（失败即报错，不回退单架构）→ 执行 `scripts/fix-macos-bundle.sh` → 打包 `.app.tar.gz` 与 `.dmg` 传至 workflow artifact。
+  - `build-windows`：在 `windows-latest` 构建并收集 `*-setup.exe` 与 `*.msi` 传至 workflow artifact。
+  - `publish-release`：汇总双端产物、统一生成 `SHA256SUMS.txt`、上传至 Release 并改为正式发布（`--draft=false`）。
 
 ### 7.3 自动化测试情况（2026-11-13 最新实测）
 
-- `npm run typecheck` + `npm run build`：通过（`tsc --noEmit` 与 `vite build` 均退出 0）。
-- `cargo test --lib`：**54 passed, 0 failed**（含文件传输本地全流程/空目录/零字节/二进制/符号链接/自包含拦截、本地 `symlink_metadata` 悬空链接修复、WSL UNC 前缀/路径规范化、更新器资产匹配与 shell 转义）。
-- `cargo test --test ssh_interop`（共 4 项，含新增 `interop_transfer_upload_and_download`）：编译与执行均退出 0，但因当前环境未安装 `ssh2` 运行 [server.js](../scripts/e2e-server/server.js) 且未配置 `GLANCE_SSH_TEST_PORT`，运行时自动跳过。
-- `cargo test --test windows_platform`：既有测试第 79 行（`uri.to_windows_path()`）存在未修复的编译报错（属历史遗留）。
-- 真机验证测试套：`cargo test --test macos_terminal`、`cargo test --test real_device`、`cargo test --test lsp_bridge`（需连接真实设备或本机环境配合环境变量执行）。
+- `npm run check`（`tsc --noEmit` + `vite build`）：通过（0 错误；转换 1342 个模块，主入口 `index` 体积 `152.63 kB`）。
+- `cargo test --lib`：**58 passed, 0 failed**（含流式搜索二进制/Unicode 测试、传输本地与并发测试、Git 解析、Updater `SHA256SUMS.txt` 解析与资产选择等）。
+- `cargo check --tests`：全部集成测试编译通过（已修复 [windows_platform.rs](../src-tauri/tests/windows_platform.rs) `#[cfg(windows)]` 编译门控及 [real_device.rs](../src-tauri/tests/real_device.rs) 远端删除断言；集成测试存在 6 条历史 unused 告警）。
+- `cargo test --test ssh_interop`（共 4 项，含 `interop_transfer_upload_and_download`）：编译通过，需配置 `ssh2` 运行 [server.js](../scripts/e2e-server/server.js) 与 `GLANCE_SSH_TEST_PORT` 方可执行实连；`macos_terminal`、`real_device`、`lsp_bridge` 需对应真实环境或设备。
+- 注：本地 `stable-x86_64-apple-darwin` 未安装 `cargo-clippy`，由 `.github/workflows/ci.yml` 在三平台 CI 中运行 `cargo clippy --all-targets`。
 
 ---
 
@@ -252,28 +268,29 @@ npm run tauri build  # 发布构建（macOS 后必须跑 bash scripts/fix-macos-
 
 ```
 src/
-  App.tsx                                  应用壳：布局、快捷键、多窗口守卫、更新重启确认
+  App.tsx                                  应用壳：布局、快捷键、多窗口事件监听（已缩减至 ~670 行）
+  hooks/useWorkspacePersistence.ts         启动恢复、工作区/标签防抖持久化、关闭前脏检查守卫
   components/
-    common/                                TitleBar / ActivityBar / StatusBar / SettingsModal / TooltipLayer / Modal / ErrorBoundary / icons
+    common/                                TitleBar / ActivityBar / StatusBar / SettingsModal / AppOverlays / ToastHost / TooltipLayer / Modal / ErrorBoundary / icons
     explorer/                              ExplorerPanel（含拖拽上传与右键菜单）/ TreeNode / TransferQueuePanel
-    editor/                                EditorArea / TabBar / MonacoHost / GitDiffView / Dialogs
+    editor/                                EditorArea（懒加载 Diff/Markdown） / TabBar（细滚轮滚动条） / MonacoHost / GitDiffView / Dialogs
     search/                                SearchPanel（按 Unicode 标量偏移高亮）
-    git/                                   GitPanel / CommitGraph
+    git/                                   GitPanel / GitModals / gitPanelParts / CommitGraph
     remote/RemotePanel.tsx                 统一 SSH / WSL 面板
-    ssh/                                   ConnectDialogs / ProfileDialog（SshPanel 为早期遗留）
-    terminal/TerminalPanel.tsx             多窗格终端 + 任务 + 问题
+    ssh/                                   ConnectDialogs / ProfileDialog
+    terminal/                              TerminalPanel / TerminalSubViews / terminalTypes
     discovery/DiscoveryPanel.tsx           局域网设备扫描与直连
-    markdown/MarkdownWysiwyg.tsx           Typora 风格所见即所得（MarkdownPreview 为早期遗留）
-    wsl/WslPanel.tsx                       早期遗留组件
-  lib/                                     format / models / monaco / platform / problems / domToMarkdown / windowState / lsp/remoteLsp
-  stores/                                  explorer / transfer / tabs / git / settings / updater / tabDrag / ui
-  services/                                files / ssh / terminal / git / discovery / lsp / updater / workspace / wsl
+    markdown/                              MarkdownWysiwyg / MarkdownOverlays
+  lib/                                     ipc / format / models / monaco / platform / problems / domToMarkdown / windowState / lsp/remoteLsp
+  stores/                                  explorer / transfer / tabs / git / settings / updater / tabDrag / toast / ui
+  services/                                files / ssh / terminal / git / discovery / lsp / updater / workspace / wsl（统一经 invokeIpc）
   types/                                   ipc / ssh / wsl
 
 src-tauri/src/
-  lib.rs                                   AppState / macOS NSMenu / invoke_handler / shutdown_runtime_sessions
-  commands/                                app / discovery / fs / git / lsp / ssh / terminal / transfer / updater / workspace / wsl
-  app_services/                            connection_profiles / discovery / lsp / search / ssh_sessions / terminal / transfer / wsl
+  lib.rs                                   AppState / 日志初始化 / macOS NSMenu / invoke_handler / shutdown_runtime_sessions_async
+  logging.rs                               零外部依赖轮转文件日志（2 MiB × 2 备份 + 调试期 stderr）
+  commands/                                app / discovery / fs / git/{mod,types,cli,parsers,inspect,actions} / lsp / ssh / terminal / transfer / updater/{mod,types,github,platform} / workspace / wsl
+  app_services/                            connection_profiles / discovery / lsp / search / ssh_sessions / terminal / transfer/{mod,types,scanner,runner} / wsl
   filesystem/                              provider / local / sftp / remote_uri
   ssh/                                     client / device_pool / host_key_verifier
   storage/                                 database / secret_store
@@ -283,12 +300,11 @@ src-tauri/src/
 
 ## 9. 下一步待验证与后续规划
 
-### 当前最优先验证（v0.1.3 实机收口）
+### 当前最优先验证（v0.1.6 实机收口）
 
-1. **真实 SSH 环境文件/文件夹传输联调**：搭建本地 `ssh2` 环境启动 [server.js](../scripts/e2e-server/server.js) 跑通 `ssh_interop`，并在局域网真实 Linux/树莓派设备验证大文件拖拽上传、批量下载、途中取消与断网恢复。
-2. **真实 Windows + WSL 环境联调**：验证 WSL `Stopped` 状态下直接访问/传输是否稳定唤醒、大文件夹经 UNC 传输速度与进度条精度、NSIS `/S /D=...` 静默升级重启表现。
-3. **发布态原地更新实测**：在下一个版本 Tag 发布后，用旧版打包产物 `.app` / `-setup.exe` 实测从检测→进度下载→自动替换重启的完整升级链路。
-4. 修复历史遗留测试 [windows_platform.rs](../src-tauri/tests/windows_platform.rs) 第 79 行失效方法调用。
+1. **真实 SSH 环境文件/文件夹并发传输联调**：搭建本地 `ssh2` 环境启动 [server.js](../scripts/e2e-server/server.js) 跑通 `ssh_interop`，并在局域网真实 Linux/树莓派设备验证多文件并发上传下载、途中取消与断网恢复。
+2. **真实 Windows + WSL 环境联调**：验证 WSL `Stopped` 状态下直接访问/传输唤醒、大文件夹经 UNC 传输速度与进度精度、`light` 主题对比度及 NSIS `/S /D=...` 静默升级重启表现。
+3. **发布态 `SHA256SUMS.txt` 与原地更新实测**：在 `v0.1.6` Release 流水线生成 `SHA256SUMS.txt` 后，用旧版打包产物 `.app` / `-setup.exe` 实测摘要校验与自动替换重启完整升级链路。
 
 ### 中长期路线图
 
