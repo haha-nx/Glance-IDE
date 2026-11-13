@@ -37,8 +37,8 @@ async fn resolve(
         ResourceUri::Wsl { distro, path } => {
             #[cfg(windows)]
             {
-                let win_path = path.replace('/', "\\");
-                let unc_path = format!(r"\\wsl.localhost\{distro}{win_path}");
+                let unc_path = crate::app_services::wsl::resolve_wsl_unc_path(&distro, &path)
+                    .map_err(FsError::InvalidPath)?;
                 Ok((state.fs.clone(), unc_path))
             }
             #[cfg(not(windows))]
@@ -87,28 +87,19 @@ pub async fn list_dir(
         ResourceUri::Wsl { distro, path } => {
             #[cfg(windows)]
             {
-                let win_path = path.replace('/', "\\");
-                let unc_path = format!(r"\\wsl.localhost\{distro}{win_path}");
+                let unc_path = crate::app_services::wsl::resolve_wsl_unc_path(&distro, &path)
+                    .map_err(FsError::InvalidPath)?;
                 let mut entries = state.fs.list_dir(&unc_path).await?;
-                let unc_prefix = format!(r"\\wsl.localhost\{distro}");
-                let unc_prefix_alt = format!(r"\\wsl$\{distro}");
                 for item in &mut entries {
-                    let subpath = if let Some(stripped) = item.path.strip_prefix(&unc_prefix) {
-                        stripped.replace('\\', "/")
-                    } else if let Some(stripped) = item.path.strip_prefix(&unc_prefix_alt) {
-                        stripped.replace('\\', "/")
-                    } else {
-                        if path.ends_with('/') {
-                            format!("{}{}", path, item.name)
-                        } else {
-                            format!("{}/{}", path, item.name)
-                        }
-                    };
-                    let normalized = if subpath.starts_with('/') {
-                        subpath
-                    } else {
-                        format!("/{subpath}")
-                    };
+                    let normalized = crate::app_services::wsl::strip_wsl_unc_prefix(&item.path, &distro)
+                        .unwrap_or_else(|| {
+                            let fallback = if path.ends_with('/') {
+                                format!("{}{}", path, item.name)
+                            } else {
+                                format!("{}/{}", path, item.name)
+                            };
+                            crate::app_services::wsl::normalize_wsl_subpath(&fallback)
+                        });
                     item.path = format!("wsl://{}{}", distro, normalized);
                 }
                 Ok(entries)

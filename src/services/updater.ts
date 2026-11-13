@@ -1,4 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+
+export type InstallMode = "in_place_app" | "silent_installer" | "manual";
 
 export interface UpdateCheckResultDto {
   currentVersion: string;
@@ -12,12 +14,21 @@ export interface UpdateCheckResultDto {
   assetUrl: string | null;
   assetSize: number | null;
   platform: string;
+  installMode: InstallMode;
 }
 
 export interface DownloadInstallerResultDto {
   savedPath: string;
   size: number;
   alreadyExisted: boolean;
+  installMode: InstallMode;
+}
+
+export interface UpdateDownloadProgressDto {
+  downloadedBytes: number;
+  totalBytes: number;
+  speedBytesPerSec: number;
+  status: "downloading" | "completed" | "cancelled" | "failed";
 }
 
 export const updaterApi = {
@@ -29,12 +40,26 @@ export const updaterApi = {
     url: string,
     fileName: string,
     expectedSize?: number | null,
+    onProgress?: (ev: UpdateDownloadProgressDto) => void,
   ): Promise<DownloadInstallerResultDto> {
+    const channel = new Channel<UpdateDownloadProgressDto>();
+    if (onProgress) {
+      channel.onmessage = onProgress;
+    }
     return invoke<DownloadInstallerResultDto>("download_update_installer", {
       url,
       fileName,
       expectedSize: expectedSize ?? null,
+      onEvent: channel,
     });
+  },
+
+  async cancelDownload(): Promise<boolean> {
+    return invoke<boolean>("cancel_update_download");
+  },
+
+  async applyUpdateAndRestart(path: string): Promise<boolean> {
+    return invoke<boolean>("apply_update_and_restart", { path });
   },
 
   async openDownloadedInstaller(path: string, revealOnly = false): Promise<void> {

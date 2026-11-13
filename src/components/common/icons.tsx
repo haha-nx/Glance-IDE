@@ -218,3 +218,33 @@ export function IconGitBranch(p: IconProps) {
     </Svg>
   );
 }
+
+/** 上传文件 */
+export function IconUpload(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M8 2.5v7.5M5 5.5 8 2.5l3 3" />
+      <path d="M2.75 10.5v2a1.25 1.25 0 0 0 1.25 1.25h8a1.25 1.25 0 0 0 1.25-1.25v-2" />
+    </Svg>
+  );
+}
+
+/** 下载文件 */
+export function IconDownload(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M8 2.5v7.5M5 7l3 3 3-3" />
+      <path d="M2.75 10.5v2a1.25 1.25 0 0 0 1.25 1.25h8a1.25 1.25 0 0 0 1.25-1.25v-2" />
+    </Svg>
+  );
+}
+
+/** 新建/上传文件夹 */
+export function IconFolderPlus(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M2 4.5A1.25 1.25 0 0 1 3.25 3.25h3l1.5 1.5h5A1.25 1.25 0 0 1 14 6v6a1.25 1.25 0 0 1-1.25 1.25h-9.5A1.25 1.25 0 0 1 2 12Z" />
+      <path d="M8 7.5v3M6.5 9h3" />
+    </Svg>
+  );
+}

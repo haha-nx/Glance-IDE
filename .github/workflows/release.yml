@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag to attach binaries to (e.g. v0.1.2)'
+        description: 'Release tag to attach binaries to (e.g. v0.1.3)'
         required: false
-        default: 'v0.1.2'
+        default: 'v0.1.3'
 
 permissions:
   contents: write
@@ -41,14 +41,69 @@ jobs:
           npm run build
           npm run tauri build -- --target universal-apple-darwin || npm run tauri build
 
+      - name: Fix macOS bundle & package in-place tar.gz / dmg
+        run: |
+          TAG="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || 'v0.1.3' }}"
+          VER="${TAG#v}"
+          APP_PATH="$(find src-tauri/target -maxdepth 6 -type d -name 'Glance IDE.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Glance IDE.app not found"
+            exit 1
+          fi
+          bash scripts/fix-macos-bundle.sh "$APP_PATH"
+          BUNDLE_DIR="$(dirname "$APP_PATH")"
+          mkdir -p release-artifacts
+          tar -C "$BUNDLE_DIR" -czf "release-artifacts/Glance.IDE_${VER}_universal.app.tar.gz" "Glance IDE.app"
+          DMG_STAGING="$(mktemp -d)"
+          cp -R "$APP_PATH" "$DMG_STAGING/"
+          ln -sfn /Applications "$DMG_STAGING/Applications"
+          hdiutil create -volname "Glance IDE" -srcfolder "$DMG_STAGING" -ov -format UDZO "release-artifacts/Glance.IDE_${VER}_universal.dmg"
+          rm -rf "$DMG_STAGING"
+
       - name: Upload macOS artifacts to Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || 'v0.1.2' }}"
+          TAG="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || 'v0.1.3' }}"
           echo "Target release tag: $TAG"
-          gh release view "$TAG" || gh release create "$TAG" --title "Glance IDE $TAG" --notes "Glance IDE $TAG 发布版本"
-          find src-tauri/target -name "*.dmg" -o -name "*.app.tar.gz" | while read -r file; do
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Glance IDE $TAG" --notes "Glance IDE $TAG 发布版本" || gh release view "$TAG" >/dev/null 2>&1
+          find release-artifacts -maxdepth 1 -type f | while read -r file; do
             echo "Uploading $file..."
             gh release upload "$TAG" "$file" --clobber
           done
+
+  build-windows:
+    name: Build Windows Installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Tauri Windows application
+        run: |
+          npm run build
+          npm run tauri build
+
+      - name: Upload Windows artifacts to Release
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || 'v0.1.3' }}"
+          gh release view $tag *>$null; if ($LASTEXITCODE -ne 0) { gh release create $tag --title "Glance IDE $tag" --notes "Glance IDE $tag 发布版本"; if ($LASTEXITCODE -ne 0) { gh release view $tag *>$null } }
+          Get-ChildItem -Path "src-tauri/target" -Recurse -Include "*-setup.exe","*.msi" | ForEach-Object {
+            Write-Host "Uploading $($_.FullName)..."
+            gh release upload $tag $_.FullName --clobber
+          }

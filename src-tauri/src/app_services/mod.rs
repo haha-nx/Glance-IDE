@@ -12,4 +12,5 @@ pub mod lsp;
 pub mod search;
 pub mod ssh_sessions;
 pub mod terminal;
+pub mod transfer;
 pub mod wsl;

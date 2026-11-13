@@ -13,6 +13,7 @@ import {
 interface TreeNodeProps {
   dirPath: string;
   depth: number;
+  dropTargetDir?: string | null;
   onContextMenu: (entry: FileEntryDto, x: number, y: number) => void;
 }
 
@@ -22,7 +23,7 @@ function TreeGlyph({ entry }: { entry: FileEntryDto }) {
   return <IconFile size={14} />;
 }
 
-export function TreeNode({ dirPath, depth, onContextMenu }: TreeNodeProps) {
+export function TreeNode({ dirPath, depth, dropTargetDir, onContextMenu }: TreeNodeProps) {
   const children = explorerStore((s) => s.childrenMap[dirPath]);
   const expanded = explorerStore((s) => s.expanded[dirPath]);
   const selectedPath = explorerStore((s) => s.selectedPath);
@@ -52,12 +53,18 @@ export function TreeNode({ dirPath, depth, onContextMenu }: TreeNodeProps) {
         const isSelected = selectedPath === entry.path;
         const isDir = entry.kind === "dir";
         const isExpanded = !!explorerStore.getState().expanded[entry.path];
+        const isDropHover = isDir && dropTargetDir === entry.path;
 
         return (
           <div key={entry.path}>
             <div
-              className={`flex cursor-pointer items-center gap-1.5 py-[3px] pr-2 hover:bg-zinc-800/70 ${
-                isSelected ? "bg-zinc-800" : ""
+              data-drop-dir={isDir ? entry.path : dirPath}
+              className={`flex cursor-pointer items-center gap-1.5 py-[3px] pr-2 transition-colors hover:bg-zinc-800/70 ${
+                isDropHover
+                  ? "bg-sky-500/20 ring-1 ring-inset ring-sky-500/70"
+                  : isSelected
+                    ? "bg-zinc-800"
+                    : ""
               }`}
               style={{ paddingLeft: 8 + depth * 14 }}
               onClick={() => {
@@ -70,6 +77,7 @@ export function TreeNode({ dirPath, depth, onContextMenu }: TreeNodeProps) {
               }}
               onContextMenu={(e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 explorerStore.getState().select(entry.path);
                 onContextMenu(entry, e.clientX, e.clientY);
               }}
@@ -91,6 +99,7 @@ export function TreeNode({ dirPath, depth, onContextMenu }: TreeNodeProps) {
               <TreeNode
                 dirPath={entry.path}
                 depth={depth + 1}
+                dropTargetDir={dropTargetDir}
                 onContextMenu={onContextMenu}
               />
             )}

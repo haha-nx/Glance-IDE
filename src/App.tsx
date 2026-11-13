@@ -24,8 +24,8 @@ import {
   DEFAULT_SETTINGS,
   settingsStore,
 } from "./stores/settings";
-import { updaterStore } from "./stores/updater";
-import { updaterApi } from "./services/updater";
+import { requestApplyUpdate, updaterStore } from "./stores/updater";
+import { calcPercent, formatBytes, formatSpeed } from "./lib/format";
 import { workspaceApi } from "./services/workspace";
 import { appApi } from "./services/files";
 import { sshApi } from "./services/ssh";
@@ -298,7 +298,10 @@ export function App() {
   const updatePromptVisible = updaterStore((s) => s.promptVisible);
   const updateResult = updaterStore((s) => s.result);
   const updateDownloading = updaterStore((s) => s.downloading);
+  const updateDownloadProgress = updaterStore((s) => s.downloadProgress);
   const updateDownloadResult = updaterStore((s) => s.downloadResult);
+  const updateApplying = updaterStore((s) => s.applying);
+  const [pendingUpdatePath, setPendingUpdatePath] = useState<string | null>(null);
 
   const handleSshReconnectFailed = useCallback(
     (profile: ConnectionProfileDto, reason: string) => {
@@ -548,6 +551,34 @@ export function App() {
     return () => window.removeEventListener("glance:activate-panel", handler);
   }, []);
 
+  // 打开设置并定位到指定分区
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const section = (e as CustomEvent<{ section?: "appearance" | "updates" | "about" }>).detail
+        ?.section;
+      if (section) setSettingsSection(section);
+      setSettingsOpen(true);
+    };
+    window.addEventListener("glance:open-settings", handler);
+    return () => window.removeEventListener("glance:open-settings", handler);
+  }, []);
+
+  // 执行更新重启前统一检查未保存标签页
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const savedPath = (e as CustomEvent<{ savedPath?: string }>).detail?.savedPath;
+      if (!savedPath) return;
+      if (tabsStore.getState().hasDirty()) {
+        setSettingsOpen(false);
+        setPendingUpdatePath(savedPath);
+      } else {
+        void updaterStore.getState().applyUpdate(savedPath);
+      }
+    };
+    window.addEventListener("glance:apply-update", handler);
+    return () => window.removeEventListener("glance:apply-update", handler);
+  }, []);
+
   // 关闭当前窗口（多窗口时仅销毁当前窗口，最后一个窗口则彻底退出应用）
   async function closeAnyway() {
     await appApi.closeWindow();
@@ -766,20 +797,50 @@ export function App() {
                 <span>发现新版本 v{updateResult.latestVersion}</span>
               </div>
               <p className="mt-1 text-[11px] text-zinc-400">
-                当前版本 v{updateResult.currentVersion}，GitHub 端已发布新版安装包。
+                当前版本 v{updateResult.currentVersion}，GitHub 端已发布新版更新。
               </p>
             </div>
             <button
               onClick={() => updaterStore.getState().dismissPrompt()}
-              className="rounded px-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+              className="flex h-6 w-6 items-center justify-center rounded text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
               title="关闭"
             >
               ✕
             </button>
           </div>
+          {updateDownloading && updateDownloadProgress && (
+            <div className="mt-2.5 space-y-1">
+              <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                <span>正在下载更新…</span>
+                <span className="font-mono text-sky-400">
+                  {calcPercent(
+                    updateDownloadProgress.downloadedBytes,
+                    updateDownloadProgress.totalBytes,
+                  )}
+                  %
+                  {updateDownloadProgress.speedBytesPerSec > 0
+                    ? ` · ${formatSpeed(updateDownloadProgress.speedBytesPerSec)}`
+                    : ""}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                <div
+                  className="h-full bg-sky-500 transition-all duration-150"
+                  style={{
+                    width: `${calcPercent(
+                      updateDownloadProgress.downloadedBytes,
+                      updateDownloadProgress.totalBytes,
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
           {updateDownloadResult && (
-            <p className="mt-2 truncate rounded border border-emerald-700/50 bg-emerald-950/30 px-2 py-1 text-[11px] text-emerald-300">
-              已下载：{updateDownloadResult.savedPath}
+            <p className="mt-2 rounded border border-emerald-700/50 bg-emerald-950/30 px-2 py-1 text-[11px] text-emerald-300">
+              {updateDownloadResult.installMode === "manual"
+                ? `已下载：${updateDownloadResult.savedPath}`
+                : `更新包已就绪 (${formatBytes(updateDownloadResult.size)})，可一键重启完成升级`}
             </p>
           )}
           <div className="mt-3 flex items-center justify-end gap-2">
@@ -793,14 +854,24 @@ export function App() {
             >
               查看详情
             </Button>
-            {updateDownloadResult ? (
+            {updateDownloading ? (
+              <Button
+                onClick={() => void updaterStore.getState().cancelDownload()}
+                className="border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-[11px] text-red-300 hover:bg-zinc-700"
+              >
+                取消下载
+              </Button>
+            ) : updateDownloadResult ? (
               <PrimaryButton
-                onClick={() =>
-                  void updaterApi.openDownloadedInstaller(updateDownloadResult.savedPath, false)
-                }
+                disabled={updateApplying}
+                onClick={() => requestApplyUpdate(updateDownloadResult.savedPath)}
                 className="px-2.5 py-1 text-[11px]"
               >
-                启动安装
+                {updateApplying
+                  ? "正在准备重启…"
+                  : updateDownloadResult.installMode === "manual"
+                    ? "启动安装"
+                    : "立即重启更新"}
               </PrimaryButton>
             ) : (
               updateResult.assetUrl && (
@@ -809,12 +880,51 @@ export function App() {
                   onClick={() => void updaterStore.getState().downloadLatestInstaller()}
                   className="px-2.5 py-1 text-[11px]"
                 >
-                  {updateDownloading ? "下载中…" : "下载更新"}
+                  下载更新
                 </PrimaryButton>
               )
             )}
           </div>
         </div>
+      )}
+
+      {/* 应用更新重启前未保存文件确认 */}
+      {pendingUpdatePath && (
+        <Modal
+          title="安装更新并重启"
+          onClose={() => setPendingUpdatePath(null)}
+          footer={
+            <>
+              <Button onClick={() => setPendingUpdatePath(null)}>取消</Button>
+              <Button
+                onClick={() => {
+                  const p = pendingUpdatePath;
+                  setPendingUpdatePath(null);
+                  void updaterStore.getState().applyUpdate(p);
+                }}
+                className="text-red-400 hover:text-red-300"
+              >
+                丢弃并更新
+              </Button>
+              <PrimaryButton
+                onClick={async () => {
+                  const p = pendingUpdatePath;
+                  const ok = await tabsStore.getState().saveAll();
+                  if (ok) {
+                    setPendingUpdatePath(null);
+                    void updaterStore.getState().applyUpdate(p);
+                  }
+                }}
+              >
+                全部保存并更新
+              </PrimaryButton>
+            </>
+          }
+        >
+          <p className="text-sm text-zinc-300">
+            有未保存的文件，重启以完成版本更新将丢失这些修改。是否先保存全部更改？
+          </p>
+        </Modal>
       )}
 
       {/* 退出应用未保存确认 */}

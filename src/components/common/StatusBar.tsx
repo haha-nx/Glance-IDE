@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { calcPercent, formatSpeed } from "../../lib/format";
 import { tabsStore } from "../../stores/tabs";
+import { transferStore } from "../../stores/transfer";
 import { uiStore } from "../../stores/ui";
+import { requestApplyUpdate, updaterStore } from "../../stores/updater";
 import { appApi } from "../../services/files";
 import { lspStatusStore, type LspStatus } from "../../lib/lsp/remoteLsp";
 
@@ -16,6 +19,13 @@ export function StatusBar({ onToggleTerminal }: StatusBarProps) {
   const [version, setVersion] = useState<string>("");
   const statuses = lspStatusStore((s) => s.statuses);
 
+  const tasks = transferStore((s) => s.tasks);
+  const updateResult = updaterStore((s) => s.result);
+  const updateDownloading = updaterStore((s) => s.downloading);
+  const updateProgress = updaterStore((s) => s.downloadProgress);
+  const updateDownloadResult = updaterStore((s) => s.downloadResult);
+  const updateApplying = updaterStore((s) => s.applying);
+
   // 安全计算远程 LSP 状态（纯数据计算，严禁在条件分支或嵌套函数中调用 Hook）
   const lsp = useMemo(() => {
     if (!activeId || !activeId.startsWith("remote://")) return null;
@@ -26,6 +36,25 @@ export function StatusBar({ onToggleTerminal }: StatusBarProps) {
     const status = statuses[deviceId] ?? { state: "closed" };
     return { deviceId, status };
   }, [activeId, statuses]);
+
+  const activeTransfer = useMemo(() => {
+    const running = tasks.filter(
+      (t) => t.status === "scanning" || t.status === "transferring",
+    );
+    if (running.length === 0) return null;
+    const totalBytes = running.reduce((acc, t) => acc + t.totalBytes, 0);
+    const transferredBytes = running.reduce((acc, t) => acc + t.transferredBytes, 0);
+    const speed = running.reduce((acc, t) => acc + t.speedBytesPerSec, 0);
+    const hasUpload = running.some((t) => t.direction === "upload");
+    const hasDownload = running.some((t) => t.direction === "download");
+    const dirLabel = hasUpload && hasDownload ? "传输" : hasUpload ? "上传" : "下载";
+    const pct = calcPercent(transferredBytes, totalBytes);
+    const spd = formatSpeed(speed);
+    return {
+      count: running.length,
+      text: `${dirLabel} ${pct}%${spd ? ` (${spd})` : ""}`,
+    };
+  }, [tasks]);
 
   useEffect(() => {
     appApi
@@ -56,11 +85,61 @@ export function StatusBar({ onToggleTerminal }: StatusBarProps) {
 
   return (
     <div className="flex h-6 items-center justify-between border-t border-zinc-800 bg-zinc-950 px-3 text-xs text-zinc-500">
-      <div className="flex items-center gap-3">
-        <span className="text-sky-500">{version || "Glance IDE"}</span>
-        {active && <span title={active.path}>{active.path}</span>}
+      <div className="flex items-center gap-3 min-w-0">
+        <span className="shrink-0 text-sky-500">{version || "Glance IDE"}</span>
+        {active && (
+          <span className="truncate" title={active.path}>
+            {active.path}
+          </span>
+        )}
       </div>
-      <div className="flex items-center gap-4">
+      <div className="flex shrink-0 items-center gap-4">
+        {activeTransfer && (
+          <button
+            type="button"
+            onClick={() =>
+              window.dispatchEvent(
+                new CustomEvent("glance:activate-panel", { detail: "explorer" }),
+              )
+            }
+            className="rounded px-1.5 font-mono text-sky-400 transition-colors hover:bg-zinc-800 hover:text-sky-300"
+            title={`共有 ${activeTransfer.count} 项文件传输进行中，点击查看队列详情`}
+          >
+            ⇅ {activeTransfer.text}
+          </button>
+        )}
+
+        {updateDownloading && updateProgress ? (
+          <button
+            type="button"
+            onClick={() =>
+              window.dispatchEvent(
+                new CustomEvent("glance:open-settings", { detail: { section: "updates" } }),
+              )
+            }
+            className="rounded px-1.5 font-mono text-sky-400 transition-colors hover:bg-zinc-800 hover:text-sky-300"
+            title="正在下载新版本更新包，点击查看详情"
+          >
+            ↓ 更新 {calcPercent(updateProgress.downloadedBytes, updateProgress.totalBytes)}%
+          </button>
+        ) : (
+          updateDownloadResult &&
+          updateResult?.hasUpdate &&
+          updateDownloadResult.installMode !== "manual" && (
+            <button
+              type="button"
+              disabled={updateApplying}
+              onClick={() => requestApplyUpdate(updateDownloadResult.savedPath)}
+              className="rounded px-1.5 font-medium text-emerald-400 transition-colors hover:bg-zinc-800 hover:text-emerald-300 disabled:opacity-50"
+              title={`v${updateResult.latestVersion} 已就绪，点击立即应用更新并重启`}
+            >
+              {updateApplying
+                ? "↻ 正在准备更新…"
+                : `↻ 重启更新到 v${updateResult.latestVersion}`}
+            </button>
+          )
+        )}
+
         {lspLabel}
         {dirtyCount > 0 && (
           <span className="text-amber-500">{dirtyCount} 个未保存</span>
@@ -76,7 +155,7 @@ export function StatusBar({ onToggleTerminal }: StatusBarProps) {
         {active?.readonly && <span className="text-amber-500">只读</span>}
         <button
           onClick={onToggleTerminal}
-          className="rounded px-1 hover:bg-zinc-800 hover:text-zinc-300"
+          className="rounded px-1 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
           title="终端 / 任务（Ctrl+`）"
         >
           ▮ 终端

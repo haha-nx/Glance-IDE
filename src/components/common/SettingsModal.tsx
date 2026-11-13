@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { appApi } from "../../services/files";
 import { updaterApi } from "../../services/updater";
+import { calcPercent, formatBytes, formatSpeed } from "../../lib/format";
 import {
   APP_THEMES,
   DEFAULT_SETTINGS,
   settingsStore,
   type AppTheme,
 } from "../../stores/settings";
-import { updaterStore } from "../../stores/updater";
+import { requestApplyUpdate, updaterStore } from "../../stores/updater";
 import { Button, Modal, PrimaryButton } from "./Modal";
 import { IS_MAC } from "../../lib/platform";
 
@@ -16,13 +17,6 @@ type SettingsSection = "appearance" | "updates" | "about";
 interface SettingsModalProps {
   onClose: () => void;
   initialSection?: SettingsSection;
-}
-
-function formatBytes(bytes: number | null | undefined): string {
-  if (!bytes || bytes <= 0) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTime(ts: number | null): string {
@@ -69,7 +63,7 @@ function ToggleSwitch({
 /** Glance IDE 完整设置界面：外观/字体/主题、GitHub 版本检测与更新、关于信息 */
 export function SettingsModal({ onClose, initialSection = "appearance" }: SettingsModalProps) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
-  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.2" });
+  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.3" });
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const fontSize = settingsStore((s) => s.fontSize);
@@ -81,9 +75,11 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
 
   const checking = updaterStore((s) => s.checking);
   const downloading = updaterStore((s) => s.downloading);
+  const applying = updaterStore((s) => s.applying);
   const lastCheckedAt = updaterStore((s) => s.lastCheckedAt);
   const updateResult = updaterStore((s) => s.result);
   const downloadResult = updaterStore((s) => s.downloadResult);
+  const downloadProgress = updaterStore((s) => s.downloadProgress);
   const updateError = updaterStore((s) => s.error);
 
   useEffect(() => {
@@ -347,9 +343,9 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
 
                 <div className="flex items-center justify-between gap-4 px-3.5 py-3">
                   <div className="min-w-0">
-                    <div className="text-xs font-medium text-zinc-100">自动下载安装包</div>
+                    <div className="text-xs font-medium text-zinc-100">自动下载更新包</div>
                     <p className="mt-0.5 text-[11px] text-zinc-400">
-                      默认关闭。开启后若检测到 GitHub 端存在新版本，将自动下载当前系统对应的安装包到下载目录。
+                      默认关闭。开启后若检测到 GitHub 端存在新版本，将在后台静默缓存匹配当前系统的更新包。
                     </p>
                   </div>
                   <ToggleSwitch
@@ -417,9 +413,50 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                     </div>
                   )}
 
+                  {downloading && downloadProgress && (
+                    <div className="space-y-1.5 rounded border border-sky-700/40 bg-zinc-950/80 px-2.5 py-2 text-[11px]">
+                      <div className="flex items-center justify-between text-zinc-300">
+                        <span>正在下载更新包…</span>
+                        <span className="font-mono text-sky-400">
+                          {calcPercent(
+                            downloadProgress.downloadedBytes,
+                            downloadProgress.totalBytes,
+                          )}
+                          %
+                          {downloadProgress.speedBytesPerSec > 0
+                            ? ` · ${formatSpeed(downloadProgress.speedBytesPerSec)}`
+                            : ""}
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                        <div
+                          className="h-full bg-sky-500 transition-all duration-150"
+                          style={{
+                            width: `${calcPercent(
+                              downloadProgress.downloadedBytes,
+                              downloadProgress.totalBytes,
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500">
+                        <span>{formatBytes(downloadProgress.downloadedBytes)}</span>
+                        <span>
+                          {downloadProgress.totalBytes > 0
+                            ? formatBytes(downloadProgress.totalBytes)
+                            : "大小未知"}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   {downloadResult && (
-                    <div className="rounded border border-emerald-700/50 bg-emerald-950/25 px-2.5 py-2 text-[11px] text-emerald-300 break-all select-text">
-                      安装包已就绪：{downloadResult.savedPath}
+                    <div className="rounded border border-emerald-700/50 bg-emerald-950/25 px-2.5 py-2 text-[11px] text-emerald-300 select-text">
+                      {downloadResult.installMode === "in_place_app"
+                        ? "更新包已准备就绪，点击「立即重启更新」将自动原地替换应用并重开，无需手动拖拽安装。"
+                        : downloadResult.installMode === "silent_installer"
+                          ? "更新包已准备就绪，点击「立即重启更新」将自动后台静默覆盖升级并重开应用。"
+                          : `安装包已就绪：${downloadResult.savedPath}`}
                     </div>
                   )}
 
@@ -433,20 +470,37 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                       </Button>
                     )}
 
-                    {downloadResult ? (
+                    {downloading ? (
+                      <Button
+                        onClick={() => void updaterStore.getState().cancelDownload()}
+                        className="border border-zinc-700 bg-zinc-800 text-xs text-red-300 hover:bg-zinc-700"
+                      >
+                        取消下载
+                      </Button>
+                    ) : downloadResult ? (
                       <>
                         <Button
                           onClick={() => void handleOpenInstaller(true)}
                           className="border border-zinc-700 bg-zinc-800 text-xs text-zinc-200 hover:bg-zinc-700"
                         >
-                          打开所在文件夹
+                          查看更新包
                         </Button>
-                        <PrimaryButton
-                          onClick={() => void handleOpenInstaller(false)}
-                          className="text-xs"
-                        >
-                          启动安装程序
-                        </PrimaryButton>
+                        {downloadResult.installMode === "manual" ? (
+                          <PrimaryButton
+                            onClick={() => void handleOpenInstaller(false)}
+                            className="text-xs"
+                          >
+                            启动安装程序
+                          </PrimaryButton>
+                        ) : (
+                          <PrimaryButton
+                            disabled={applying}
+                            onClick={() => requestApplyUpdate(downloadResult.savedPath)}
+                            className="text-xs"
+                          >
+                            {applying ? "正在准备重启…" : "立即重启更新"}
+                          </PrimaryButton>
+                        )}
                       </>
                     ) : (
                       updateResult.assetUrl && (
@@ -455,13 +509,11 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                           disabled={downloading}
                           className="text-xs"
                         >
-                          {downloading
-                            ? "正在下载安装包…"
-                            : `下载安装包${
-                                updateResult.assetSize
-                                  ? ` (${formatBytes(updateResult.assetSize)})`
-                                  : ""
-                              }`}
+                          {`下载更新${
+                            updateResult.assetSize
+                              ? ` (${formatBytes(updateResult.assetSize)})`
+                              : ""
+                          }`}
                         </PrimaryButton>
                       )
                     )}

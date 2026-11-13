@@ -7,6 +7,7 @@ pub mod git;
 pub mod lsp;
 pub mod ssh;
 pub mod terminal;
+pub mod transfer;
 pub mod updater;
 pub mod workspace;
 pub mod wsl;

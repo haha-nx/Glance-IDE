@@ -127,8 +127,43 @@ export const explorerStore = create<ExplorerState>()((set, get) => ({
   select: (path) => set({ selectedPath: path }),
 
   parentOf: (path) => {
-    const idx = path.lastIndexOf("/");
-    if (idx <= 0) return null;
-    return path.slice(0, idx);
+    // 处理 remote://<uuid><subpath> 与 wsl://<distro><subpath>
+    const schemeMatch = path.match(/^((?:remote|wsl):\/\/[^/]+)(.*)$/);
+    if (schemeMatch) {
+      const prefix = schemeMatch[1];
+      let sub = schemeMatch[2].replace(/\\/g, "/");
+      if (sub.length > 1 && sub.endsWith("/")) sub = sub.slice(0, -1);
+      if (!sub || sub === "/") return null;
+      const idx = sub.lastIndexOf("/");
+      if (idx <= 0) return `${prefix}/`;
+      return `${prefix}${sub.slice(0, idx)}`;
+    }
+    // 处理 Windows 驱动器/UNC 或 POSIX 本地路径
+    const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+    let trimmed = path;
+    if (trimmed.length > 1 && (trimmed.endsWith("/") || trimmed.endsWith("\\"))) {
+      trimmed = trimmed.slice(0, -1);
+    }
+    if (/^[A-Za-z]:$/.test(trimmed)) return null;
+    const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+    if (idx < 0) return null;
+    if (idx === 0) return "/";
+    const parent = trimmed.slice(0, idx);
+    if (/^[A-Za-z]:$/.test(parent)) return `${parent}${sep}`;
+    return parent;
   },
 }));
+
+/** 安全拼接目录路径与子项名，避免根路径下出现双斜杠 `remote://uuid//foo` */
+export function joinChildPath(dir: string, name: string): string {
+  const cleanName = name.replace(/^[/\\]+/, "");
+  if (dir.startsWith("remote://") || dir.startsWith("wsl://") || dir.startsWith("local://")) {
+    const cleanDir = dir.endsWith("/") ? dir.slice(0, -1) : dir;
+    return `${cleanDir}/${cleanName}`;
+  }
+  const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+  const cleanDir =
+    dir.length > 1 && (dir.endsWith("/") || dir.endsWith("\\")) ? dir.slice(0, -1) : dir;
+  if (cleanDir === "/" || cleanDir === "\\") return `${cleanDir}${cleanName}`;
+  return `${cleanDir}${sep}${cleanName}`;
+}

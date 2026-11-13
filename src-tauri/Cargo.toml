@@ -1,6 +1,6 @@
 [package]
 name = "glance-ide"
-version = "0.1.2"
+version = "0.1.3"
 description = "Glance IDE — 本地/远程一体化开发工作台"
 authors = ["Glance IDE"]
 edition = "2021"

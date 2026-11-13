@@ -29,6 +29,8 @@ pub struct AppState {
     pub terminals: Arc<app_services::terminal::TerminalRegistry>,
     /// LSP 通道注册表（M6）
     pub lsp: Arc<app_services::lsp::LspRegistry>,
+    /// 文件传输任务注册表
+    pub transfers: Arc<app_services::transfer::TransferRegistry>,
     /// 等待用户确认的握手观测密钥（fingerprint → 观测记录），
     /// 在 approve_identity 时消费用于持久化公钥 blob
     pub pending_keys: StdMutex<PendingKeyMap>,
@@ -43,8 +45,27 @@ impl AppState {
             sessions: Default::default(),
             terminals: Default::default(),
             lsp: Default::default(),
+            transfers: Default::default(),
             pending_keys: StdMutex::new(HashMap::new()),
         }
+    }
+}
+
+/// 在退出或更新重启前清理活跃传输、终端、LSP 与 SSH 会话。
+pub fn shutdown_runtime_sessions(state: &AppState) {
+    state.transfers.cancel_all();
+    let terminals = state.terminals.clone();
+    tauri::async_runtime::spawn(async move {
+        app_services::terminal::close_all(&terminals).await;
+    });
+    app_services::lsp::close_all(&state.lsp);
+    for entry in state.sessions.list() {
+        tauri::async_runtime::spawn(async move {
+            let handle = entry.handle.lock().await;
+            let _ = handle
+                .disconnect(russh::Disconnect::ByApplication, "app exit", "en")
+                .await;
+        });
     }
 }
 
@@ -67,6 +88,7 @@ pub fn run() {
                 Box::new(KeyringStore::default()),
             ));
             app.manage(commands::discovery::DiscoveryState::default());
+            app.manage(commands::updater::UpdaterDownloadState::default());
 
             // macOS 使用系统顶部全局原生菜单栏（AppKit 规范）；Windows 使用与 VS Code 一致的单行自定义暗色标题栏
             #[cfg(target_os = "macos")]
@@ -289,9 +311,11 @@ pub fn run() {
             // 版本检测与更新
             commands::updater::check_github_update,
             commands::updater::download_update_installer,
+            commands::updater::cancel_update_download,
+            commands::updater::apply_update_and_restart,
             commands::updater::open_downloaded_installer,
             commands::updater::open_external_url,
-            // 文件系统
+            // 文件系统与文件传输
             commands::fs::list_dir,
             commands::fs::read_file,
             commands::fs::write_file,
@@ -299,6 +323,11 @@ pub fn run() {
             commands::fs::create_file,
             commands::fs::rename_entry,
             commands::fs::delete_entry,
+            commands::transfer::check_transfer_conflicts,
+            commands::transfer::upload_to_workspace,
+            commands::transfer::download_from_workspace,
+            commands::transfer::cancel_transfer,
+            commands::transfer::reveal_local_path,
             // SSH 连接配置与设备池（M2）
             commands::ssh::list_profiles,
             commands::ssh::create_profile,
@@ -365,20 +394,7 @@ pub fn run() {
                 if window.label() == "main" {
                     let state: Option<tauri::State<AppState>> = window.try_state();
                     if let Some(state) = state {
-                        // 关闭全部终端通道与 LSP 通道（生命周期管理）
-                        let terminals = state.terminals.clone();
-                        tauri::async_runtime::spawn(async move {
-                            app_services::terminal::close_all(&terminals).await;
-                        });
-                        app_services::lsp::close_all(&state.lsp);
-                        for entry in state.sessions.list() {
-                            tauri::async_runtime::spawn(async move {
-                                let handle = entry.handle.lock().await;
-                                let _ = handle
-                                    .disconnect(russh::Disconnect::ByApplication, "app exit", "en")
-                                    .await;
-                            });
-                        }
+                        shutdown_runtime_sessions(&state);
                     }
                 }
             }

@@ -249,3 +249,135 @@ async fn interop_exec_and_pty() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert!(registry.list().is_empty(), "关闭后注册表应清空");
 }
+
+#[tokio::test]
+async fn interop_transfer_upload_and_download() {
+    use glance_ide_lib::app_services::ssh_sessions::SessionManager;
+    use glance_ide_lib::app_services::transfer::{
+        check_conflicts, run_download, run_upload, ConflictPolicy, TransferProgressEvent,
+        TransferRegistry, TransferStatus,
+    };
+    use std::sync::Arc;
+    use tauri::ipc::{Channel, InvokeResponseBody};
+
+    let Some(ctx) = test_ctx() else {
+        eprintln!("跳过：未设置 GLANCE_SSH_TEST_PORT / GLANCE_SSH_TEST_HOSTKEY_PUB");
+        return;
+    };
+    let device_id = Uuid::new_v4();
+    let pool = vec![TrustedDevice {
+        device_identity_id: device_id,
+        fingerprint: ctx.fingerprint.clone(),
+        display_name: "Transfer 测试".into(),
+    }];
+    let ConnectStep::Connected { handle, .. } = connect_and_auth(params(&ctx, pool, &ctx.password)).await else {
+        panic!("SSH 前置连接失败");
+    };
+
+    let sessions = SessionManager::default();
+    sessions.insert(Uuid::new_v4(), Uuid::new_v4(), device_id, None, "127.0.0.1".into(), 0, handle);
+    let registry = Arc::new(TransferRegistry::default());
+
+    struct TestDir(std::path::PathBuf);
+    impl TestDir {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!("glance-ssh-transfer-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    let tmp = TestDir::new();
+    let src_dir = tmp.path().join("upload_src");
+    let bundle_dir = src_dir.join("bundle");
+    std::fs::create_dir_all(bundle_dir.join("empty_dir")).unwrap();
+    std::fs::create_dir_all(bundle_dir.join("sub")).unwrap();
+    std::fs::write(bundle_dir.join("empty.txt"), b"").unwrap();
+    let big_bin: Vec<u8> = (0..600_000).map(|i| ((i * 31) % 256) as u8).collect();
+    std::fs::write(bundle_dir.join("sub/data.bin"), &big_bin).unwrap();
+    std::fs::write(src_dir.join("top.txt"), b"top-payload").unwrap();
+
+    // 使用本地回环 SFTP 服务器 /tmp/glance-transfer-test 目录，测试结束后清理
+    let remote_base = tmp.path().join("remote_target");
+    std::fs::create_dir_all(&remote_base).unwrap();
+    let remote_uri = format!("remote://{}{}", device_id, remote_base.to_string_lossy());
+
+    let mk_channel = || {
+        let events = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let events_ref = events.clone();
+        let ch: Channel<TransferProgressEvent> = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(s) = body {
+                events_ref.lock().unwrap().push(s);
+            }
+            Ok(())
+        });
+        (ch, events)
+    };
+
+    // 1. 上传文件夹 + 单文件到 SFTP
+    let (up_ch, up_events) = mk_channel();
+    let up_res = run_upload(
+        &sessions,
+        &registry,
+        "sftp-up".into(),
+        vec![
+            bundle_dir.to_string_lossy().into_owned(),
+            src_dir.join("top.txt").to_string_lossy().into_owned(),
+        ],
+        remote_uri.clone(),
+        ConflictPolicy::Overwrite,
+        up_ch,
+    )
+    .await
+    .expect("SFTP 上传失败");
+    assert_eq!(up_res.status, TransferStatus::Completed);
+    assert!(remote_base.join("bundle/empty_dir").is_dir());
+    assert_eq!(std::fs::read(remote_base.join("bundle/empty.txt")).unwrap(), b"");
+    assert_eq!(std::fs::read(remote_base.join("bundle/sub/data.bin")).unwrap(), big_bin);
+    assert_eq!(std::fs::read(remote_base.join("top.txt")).unwrap(), b"top-payload");
+    assert!(!up_events.lock().unwrap().is_empty());
+
+    // 2. 冲突检测 & Skip 策略
+    let conflicts = check_conflicts(
+        &sessions,
+        vec![src_dir.join("top.txt").to_string_lossy().into_owned()],
+        remote_uri.clone(),
+    )
+    .await
+    .expect("冲突检测失败");
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].name, "top.txt");
+
+    // 3. 从 SFTP 下载整目录到本地另一目录并校验二进制一致性
+    let dl_dest = tmp.path().join("downloaded");
+    let (dl_ch, dl_events) = mk_channel();
+    let dl_res = run_download(
+        &sessions,
+        &registry,
+        "sftp-dl".into(),
+        vec![
+            format!("remote://{}{}/bundle", device_id, remote_base.to_string_lossy()),
+            format!("remote://{}{}/top.txt", device_id, remote_base.to_string_lossy()),
+        ],
+        Some(dl_dest.to_string_lossy().into_owned()),
+        None,
+        ConflictPolicy::Overwrite,
+        dl_ch,
+    )
+    .await
+    .expect("SFTP 下载失败");
+    assert_eq!(dl_res.status, TransferStatus::Completed);
+    assert!(dl_dest.join("bundle/empty_dir").is_dir());
+    assert_eq!(std::fs::read(dl_dest.join("bundle/empty.txt")).unwrap(), b"");
+    assert_eq!(std::fs::read(dl_dest.join("bundle/sub/data.bin")).unwrap(), big_bin);
+    assert_eq!(std::fs::read(dl_dest.join("top.txt")).unwrap(), b"top-payload");
+    assert!(!dl_events.lock().unwrap().is_empty());
+}

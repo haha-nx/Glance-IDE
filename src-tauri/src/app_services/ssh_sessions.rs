@@ -51,6 +51,29 @@ impl SessionEntry {
         Ok(provider)
     }
 
+    /// 为文件传输打开独立的 SFTP 会话通道（与目录/编辑器通道隔离，避免大文件传输阻塞界面）。
+    pub async fn open_transfer_sftp(&self) -> Result<SftpSession, String> {
+        let handle = self.handle.lock().await;
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("打开传输 SFTP 通道失败: {e}"))?;
+        drop(handle);
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| format!("请求传输 sftp subsystem 失败: {e}"))?;
+        let config = russh_sftp::client::Config {
+            request_timeout_secs: 60,
+            max_concurrent_reads: 32,
+            max_concurrent_writes: 32,
+            ..Default::default()
+        };
+        SftpSession::new_with_config(channel.into_stream(), config)
+            .await
+            .map_err(|e| format!("传输 SFTP 初始化失败: {e}"))
+    }
+
     /// 传输是否仍存活（僵尸会话判定：对端关闭/网络中断后 handle 置 closed）
     pub async fn is_alive(&self) -> bool {
         !self.handle.lock().await.is_closed()

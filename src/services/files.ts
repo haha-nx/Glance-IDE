@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AppInfoDto,
   FileContentDto,
@@ -124,5 +124,103 @@ export const appApi = {
     } catch (err) {
       console.error("新建窗口失败:", err);
     }
+  },
+};
+
+export type TransferDirection = "upload" | "download";
+export type TransferStatus =
+  | "scanning"
+  | "transferring"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type ConflictPolicy = "overwrite" | "skip";
+
+export interface TransferConflictDto {
+  name: string;
+  destPath: string;
+  isDir: boolean;
+}
+
+export interface TransferProgressDto {
+  taskId: string;
+  direction: TransferDirection;
+  status: TransferStatus;
+  totalFiles: number;
+  completedFiles: number;
+  totalBytes: number;
+  transferredBytes: number;
+  currentFile: string;
+  speedBytesPerSec: number;
+  error?: string | null;
+}
+
+export interface TransferResultDto {
+  taskId: string;
+  direction: TransferDirection;
+  status: TransferStatus;
+  totalFiles: number;
+  completedFiles: number;
+  totalBytes: number;
+  transferredBytes: number;
+  destPaths: string[];
+  error?: string | null;
+}
+
+export const transferApi = {
+  async checkConflicts(
+    items: string[],
+    targetDirUri: string,
+  ): Promise<TransferConflictDto[]> {
+    return invoke<TransferConflictDto[]>("check_transfer_conflicts", {
+      items,
+      targetDirUri,
+    });
+  },
+
+  async upload(
+    taskId: string,
+    sourceLocalPaths: string[],
+    targetDirUri: string,
+    conflictPolicy: ConflictPolicy,
+    onProgress: (ev: TransferProgressDto) => void,
+  ): Promise<TransferResultDto> {
+    const channel = new Channel<TransferProgressDto>();
+    channel.onmessage = onProgress;
+    return invoke<TransferResultDto>("upload_to_workspace", {
+      taskId,
+      sourceLocalPaths,
+      targetDirUri,
+      conflictPolicy,
+      onEvent: channel,
+    });
+  },
+
+  async download(
+    taskId: string,
+    sourceUris: string[],
+    destDirPath: string | null,
+    destFilePath: string | null,
+    conflictPolicy: ConflictPolicy,
+    onProgress: (ev: TransferProgressDto) => void,
+  ): Promise<TransferResultDto> {
+    const channel = new Channel<TransferProgressDto>();
+    channel.onmessage = onProgress;
+    return invoke<TransferResultDto>("download_from_workspace", {
+      taskId,
+      sourceUris,
+      destDirPath,
+      destFilePath,
+      conflictPolicy,
+      onEvent: channel,
+    });
+  },
+
+  async cancel(taskId: string): Promise<boolean> {
+    return invoke<boolean>("cancel_transfer", { taskId });
+  },
+
+  async revealLocalPath(path: string): Promise<void> {
+    return invoke("reveal_local_path", { path });
   },
 };

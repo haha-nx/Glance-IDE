@@ -37,6 +37,11 @@ impl SftpFileSystem {
         .map(|p| p.replace('\\', "/"))
     }
 
+    /// 暴露内部 SFTP 会话互斥锁，供单通道服务器回退共享使用。
+    pub(crate) fn session_mutex(&self) -> &AsyncMutex<SftpSession> {
+        &self.sftp
+    }
+
     fn map_err(e: impl std::fmt::Display) -> FsError {
         FsError::Io(format!("SFTP: {e}"))
     }
@@ -59,7 +64,10 @@ impl SftpFileSystem {
 #[async_trait]
 impl FileSystemProvider for SftpFileSystem {
     async fn list_dir(&self, path: &str) -> FsResult<Vec<FileEntry>> {
-        let clean_path = path.replace('\\', "/");
+        let mut clean_path = path.replace('\\', "/");
+        while clean_path.contains("//") {
+            clean_path = clean_path.replace("//", "/");
+        }
         let sftp = self.sftp.lock().await;
         let read_dir = tokio::time::timeout(
             std::time::Duration::from_secs(15),
@@ -223,7 +231,7 @@ impl FileSystemProvider for SftpFileSystem {
     async fn delete(&self, path: &str, recursive: bool) -> FsResult<()> {
         let clean_path = path.replace('\\', "/");
         let sftp = self.sftp.lock().await;
-        let meta = sftp.metadata(&clean_path).await.map_err(Self::map_err)?;
+        let meta = sftp.symlink_metadata(&clean_path).await.map_err(Self::map_err)?;
         if meta.is_dir() {
             if recursive {
                 // 后序遍历删除：先清空子项，再删目录本身
@@ -233,6 +241,10 @@ impl FileSystemProvider for SftpFileSystem {
                 while let Some(dir) = pending.pop() {
                     dirs.push(dir.clone());
                     for entry in sftp.read_dir(&dir).await.map_err(Self::map_err)? {
+                        let name = entry.file_name();
+                        if name == "." || name == ".." {
+                            continue;
+                        }
                         let sub = entry.path().replace('\\', "/");
                         if entry.file_type().is_dir() {
                             pending.push(sub);

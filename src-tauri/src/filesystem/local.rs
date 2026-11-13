@@ -76,9 +76,8 @@ impl FileSystemProvider for LocalFileSystem {
                 .await
                 .map_err(|e| FsError::Io(format!("读取类型失败: {e}")))?;
             let is_symlink = file_type.is_symlink();
-            // 符号链接按其自身属性展示，不跟随目标
-            let metadata = item
-                .metadata()
+            // 符号链接按其自身属性展示，不跟随目标（悬空链接也使用 symlink_metadata 读取自身元数据）
+            let metadata = fs::symlink_metadata(item.path())
                 .await
                 .map_err(|e| FsError::Io(format!("读取元数据失败: {e}")))?;
             let modified_ms = metadata.modified().ok().map(system_time_to_ms);
@@ -249,7 +248,7 @@ impl FileSystemProvider for LocalFileSystem {
 
     async fn delete(&self, path: &str, recursive: bool) -> FsResult<()> {
         let target = normalize(path)?;
-        let metadata = fs::metadata(&target)
+        let metadata = fs::symlink_metadata(&target)
             .await
             .map_err(|e| match e.kind() {
                 std::io::ErrorKind::NotFound => FsError::NotFound(target.display().to_string()),
@@ -345,6 +344,29 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].kind, FileKind::Dir);
         assert_eq!(entries[1].name, "afile.txt");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_dir_handles_dangling_symlink_and_delete_preserves_target() {
+        let root = temp_root("symlink");
+        let real_dir = root.join("real_dir");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        std::fs::write(real_dir.join("keep.txt"), "keep").unwrap();
+        std::os::unix::fs::symlink(root.join("missing_target"), root.join("dangling")).unwrap();
+        std::os::unix::fs::symlink(&real_dir, root.join("link_dir")).unwrap();
+
+        let fs_impl = LocalFileSystem::new();
+        let entries = fs_impl.list_dir(&root.display().to_string()).await.unwrap();
+        assert!(entries.iter().any(|e| e.name == "dangling" && e.kind == FileKind::Symlink));
+        assert!(entries.iter().any(|e| e.name == "link_dir" && e.kind == FileKind::Symlink));
+
+        fs_impl
+            .delete(&root.join("link_dir").display().to_string(), false)
+            .await
+            .unwrap();
+        assert!(real_dir.join("keep.txt").exists(), "删除目录符号链接不应误删真实目标目录内容");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
