@@ -13,7 +13,8 @@ import {
   type ProfileInput,
 } from "../../types/ssh";
 import type { WslDistroDto } from "../../types/wsl";
-import { PrimaryButton } from "../common/Modal";
+import { Button, DangerButton, Modal, PrimaryButton } from "../common/Modal";
+import { showErrorToast } from "../../stores/toast";
 import {
   IconEdit,
   IconPlus,
@@ -169,7 +170,7 @@ export function RemotePanel() {
       await refreshSsh();
       await connectCurrentWindow(profile);
     } catch (err) {
-      alert(err instanceof CmdError ? err.message : String(err));
+      showErrorToast(err instanceof CmdError ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -183,7 +184,7 @@ export function RemotePanel() {
       await explorerStore.getState().openRoot(`wsl://${distroName}${cleanHome}`);
       window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: "explorer" }));
     } catch (err) {
-      alert(`打开 WSL 失败: ${String(err)}`);
+      showErrorToast(`打开 WSL 失败: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -198,7 +199,7 @@ export function RemotePanel() {
       setDialog(null);
       await refreshSsh();
     } catch (err) {
-      alert(err instanceof CmdError ? err.message : String(err));
+      showErrorToast(err instanceof CmdError ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -211,7 +212,7 @@ export function RemotePanel() {
       setDialog(null);
       await refreshSsh();
     } catch (err) {
-      alert(err instanceof CmdError ? err.message : String(err));
+      showErrorToast(err instanceof CmdError ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -425,29 +426,25 @@ export function RemotePanel() {
       )}
 
       {dialog?.kind === "delete" && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-80 rounded-lg border border-zinc-800 bg-zinc-900 p-4 shadow-xl">
-            <h3 className="text-sm font-semibold text-zinc-200">删除连接配置</h3>
-            <p className="mt-2 text-xs text-zinc-400">
-              确定要删除配置 “{dialog.profile.name || dialog.profile.host}” 吗？此操作无法撤销。
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                onClick={() => setDialog(null)}
-                className="rounded px-2.5 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
-              >
+        <Modal
+          title="删除连接配置"
+          width={360}
+          onClose={() => !busy && setDialog(null)}
+          footer={
+            <>
+              <Button onClick={() => setDialog(null)} disabled={busy}>
                 取消
-              </button>
-              <button
-                onClick={() => void deleteProfile(dialog.profile)}
-                disabled={busy}
-                className="rounded bg-red-600 px-2.5 py-1 text-xs text-white hover:bg-red-500 disabled:opacity-50"
-              >
+              </Button>
+              <DangerButton onClick={() => void deleteProfile(dialog.profile)} disabled={busy}>
                 {busy ? "删除中…" : "删除"}
-              </button>
-            </div>
-          </div>
-        </div>
+              </DangerButton>
+            </>
+          }
+        >
+          <p className="text-xs text-zinc-400">
+            确定要删除配置 “{dialog.profile.name || dialog.profile.host}” 吗？此操作无法撤销。
+          </p>
+        </Modal>
       )}
 
       {register && (

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, Fragment } from "react";
 import { FitAddon } from "@xterm/addon-fit";
-import type { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 import { sshApi } from "../../services/ssh";
@@ -12,101 +11,21 @@ import {
 } from "../../services/terminal";
 import { tabsStore } from "../../stores/tabs";
 import { explorerStore } from "../../stores/explorer";
-import { settingsStore, type AppTheme } from "../../stores/settings";
+import { settingsStore } from "../../stores/settings";
 import { parseProblems, resolveProblemPath, type Problem } from "../../lib/problems";
 import { isPrimaryWindow } from "../../lib/windowState";
 import { IS_MAC } from "../../lib/platform";
 import type { SessionDto } from "../../types/ssh";
 import type { WslDistroDto } from "../../types/wsl";
 import { IconClose } from "../common/icons";
-
-function terminalThemeFor(theme: AppTheme) {
-  switch (theme) {
-    case "midnight":
-      return {
-        background: "#090d16",
-        foreground: "#cbd5e1",
-        cursor: "#38bdf8",
-        selectionBackground: "#38bdf855",
-      };
-    case "nord":
-      return {
-        background: "#232831",
-        foreground: "#d8dee9",
-        cursor: "#88c0d0",
-        selectionBackground: "#88c0d044",
-      };
-    case "light":
-      return {
-        background: "#f8fafc",
-        foreground: "#1e293b",
-        cursor: "#0284c7",
-        cursorAccent: "#ffffff",
-        selectionBackground: "#0284c733",
-        black: "#1e293b",
-        red: "#dc2626",
-        green: "#16a34a",
-        yellow: "#ca8a04",
-        blue: "#2563eb",
-        magenta: "#9333ea",
-        cyan: "#0891b2",
-        white: "#64748b",
-        brightBlack: "#475569",
-        brightRed: "#ef4444",
-        brightGreen: "#22c55e",
-        brightYellow: "#d97706",
-        brightBlue: "#3b82f6",
-        brightMagenta: "#a855f7",
-        brightCyan: "#06b6d4",
-        brightWhite: "#0f172a",
-      };
-    default:
-      return {
-        background: "#131316",
-        foreground: "#d4d4d8",
-        cursor: "#38bdf8",
-        selectionBackground: "#38bdf855",
-      };
-  }
-}
-
-interface TermTabItem {
-  id: string;
-  title: string;
-  type: "local" | "wsl" | "ssh";
-  channelId: string;
-  /** SSH 终端关联的设备身份，用于会话掉线时精准回收对应标签 */
-  deviceIdentityId?: string;
-  /** 用户是否已在该终端输入过内容，防止自动连接替换掉正在使用的本机终端 */
-  hasInput: boolean;
-  term: XTerm;
-  fit: FitAddon;
-  container: HTMLDivElement;
-}
-
-/** 终端分屏窗格：每个窗格拥有独立的标签栏与活动终端 */
-interface TermPane {
-  id: string;
-  tabIds: string[];
-  activeId: string | null;
-}
-
-interface TermDragState {
-  termId: string;
-  fromPaneId: string;
-  title: string;
-  x: number;
-  y: number;
-  target: { paneId: string; zone: "tabbar" | "center" | "left" | "right"; index?: number } | null;
-}
-
-interface TerminalPanelProps {
-  visible?: boolean;
-  onClose: () => void;
-  isMaximized?: boolean;
-  onToggleMaximize?: () => void;
-  onTerminalCountChange?: (count: number) => void;
-}
+import { PanelTab, ProblemsView, TasksView } from "./TerminalSubViews";
+import {
+  terminalThemeFor,
+  type TermDragState,
+  type TerminalPanelProps,
+  type TermPane,
+  type TermTabItem,
+} from "./terminalTypes";
 
 export function TerminalPanel({
   visible = true,
@@ -1119,80 +1038,21 @@ export function TerminalPanel({
 
       {/* 任务视图 */}
       {tab === "tasks" && (
-        <div className="flex min-h-0 flex-1 flex-col p-2 text-xs">
-          <div className="flex items-center gap-2 pb-2">
-            <input
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder="构建命令（如 cargo build 或 make）"
-              className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-zinc-200 outline-none focus:border-sky-500"
-            />
-            <button
-              onClick={() => void runTask()}
-              disabled={running || sessions.length === 0}
-              className="rounded bg-sky-600 px-3 py-1 font-medium text-white hover:bg-sky-500 disabled:opacity-50"
-            >
-              {running ? "运行中…" : "执行"}
-            </button>
-          </div>
-          <div
-            ref={outputRef}
-            className="min-h-0 flex-1 overflow-auto rounded bg-[var(--glance-bg-terminal)] p-2 font-mono text-[11px] text-zinc-300"
-          >
-            <pre className="whitespace-pre-wrap">{taskOutput || "（暂无任务输出）"}</pre>
-          </div>
-        </div>
+        <TasksView
+          command={command}
+          onCommandChange={setCommand}
+          onRunTask={() => void runTask()}
+          running={running}
+          hasSessions={sessions.length > 0}
+          taskOutput={taskOutput}
+          outputRef={outputRef}
+        />
       )}
 
       {/* 问题视图 */}
       {tab === "problems" && (
-        <div className="min-h-0 flex-1 overflow-auto p-2 text-xs">
-          {problems.length === 0 ? (
-            <p className="text-zinc-500">未检测到编译问题。</p>
-          ) : (
-            <div className="space-y-1">
-              {problems.map((p, i) => (
-                <div
-                  key={i}
-                  onClick={() => openProblem(p)}
-                  className="flex cursor-pointer items-center justify-between rounded px-2 py-1 text-zinc-300 hover:bg-zinc-800"
-                >
-                  <span className="truncate">
-                    <span className={p.severity === "error" ? "text-red-400" : "text-amber-400"}>
-                      [{p.severity.toUpperCase()}]
-                    </span>{" "}
-                    {p.message}
-                  </span>
-                  <span className="ml-2 shrink-0 font-mono text-[11px] text-zinc-500">
-                    {p.file}:{p.line}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <ProblemsView problems={problems} onOpenProblem={openProblem} />
       )}
     </div>
-  );
-}
-
-function PanelTab({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded px-2.5 py-1 text-xs transition-colors ${
-        active ? "bg-zinc-800 text-zinc-100 font-medium" : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900"
-      }`}
-    >
-      {children}
-    </button>
   );
 }

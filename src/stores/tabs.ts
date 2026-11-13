@@ -4,6 +4,7 @@ import { filesApi, FsError } from "../services/files";
 import { gitApi, type GitFileDiffDto, type GitFileDiffRequest } from "../services/git";
 import { getOrCreateModel, setModelValueQuiet, disposeModel, getModel, toModelUri } from "../lib/models";
 import { settingsStore } from "./settings";
+import { showErrorToast } from "./toast";
 
 /**
  * 编辑器标签页状态（仅界面状态；权威文件状态在 Rust 端）。
@@ -444,7 +445,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
     } catch (err) {
       const message = err instanceof FsError ? err.shape.message : String(err);
       set({ pendingConflict: null });
-      alert(`加载远端版本失败：${message}`);
+      showErrorToast(`加载远端版本失败：${message}`);
     }
   },
 
@@ -526,7 +527,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
         return false;
       }
       const message = err instanceof FsError ? err.shape.message : String(err);
-      alert(`保存失败：${message}`);
+      showErrorToast(`保存失败：${message}`);
       return false;
     }
   },

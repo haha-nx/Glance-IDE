@@ -1,28 +1,18 @@
-import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { getModel } from "../../lib/models";
 import { tabsStore } from "../../stores/tabs";
 import { domToMarkdown } from "../../lib/domToMarkdown";
-import { IconClose } from "../common/icons";
-
-interface MarkdownWysiwygProps {
-  uri: string;
-  headerRight?: ReactNode;
-}
-
-interface TocItem {
-  id: string;
-  level: number;
-  text: string;
-  element: HTMLElement;
-}
-
-interface ContextMenuState {
-  x: number;
-  y: number;
-  inTable: boolean;
-}
+import {
+  MarkdownContextMenu,
+  MarkdownTocSidebar,
+  TableInsertModal,
+  type ContextMenuState,
+  type MarkdownSubmenu,
+  type MarkdownWysiwygProps,
+  type TocItem,
+} from "./MarkdownOverlays";
 
 export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -45,7 +35,7 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
 
   // 右键菜单（参考 Typora 风格）
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [hoverSubmenu, setHoverSubmenu] = useState<"heading" | "format" | "insert" | "table" | null>(null);
+  const [hoverSubmenu, setHoverSubmenu] = useState<MarkdownSubmenu>(null);
 
   const isComposingRef = useRef(false);
   const isInternalChangeRef = useRef(false);
@@ -617,48 +607,7 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {/* 文档大纲侧边栏（置于左侧，不影响全局 IDE 侧边栏） */}
         {tocOpen && (
-          <div className="w-60 shrink-0 border-r border-zinc-800 bg-zinc-950/90 p-3 flex flex-col min-h-0 select-none">
-            <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800 text-xs font-medium text-zinc-300">
-              <span className="flex items-center gap-1.5">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="8" y1="6" x2="21" y2="6" />
-                  <line x1="8" y1="12" x2="21" y2="12" />
-                  <line x1="8" y1="18" x2="21" y2="18" />
-                  <line x1="3" y1="6" x2="3.01" y2="6" />
-                  <line x1="3" y1="12" x2="3.01" y2="12" />
-                  <line x1="3" y1="18" x2="3.01" y2="18" />
-                </svg>
-                文档大纲
-              </span>
-              <button
-                onClick={() => setTocOpen(false)}
-                className="text-zinc-500 hover:text-zinc-300 p-0.5 rounded hover:bg-zinc-800"
-                title="关闭大纲"
-              >
-                <IconClose size={12} />
-              </button>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto space-y-0.5">
-              {tocItems.length === 0 ? (
-                <p className="text-xs text-zinc-500 py-6 text-center">暂无标题段落</p>
-              ) : (
-                tocItems.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      item.element.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }}
-                    style={{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }}
-                    className="flex w-full items-center text-left text-xs py-1 text-zinc-400 hover:bg-zinc-800/80 hover:text-sky-300 rounded truncate transition-colors"
-                    title={item.text}
-                  >
-                    <span className="truncate">{item.text}</span>
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
+          <MarkdownTocSidebar tocItems={tocItems} onClose={() => setTocOpen(false)} />
         )}
 
         {/* 原地编辑排版区域 */}
@@ -764,307 +713,39 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
 
       {/* Typora 风格右键菜单 */}
       {contextMenu && (
-        <div
-          id="md-wysiwyg-context-menu"
-          style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
-          className="fixed z-[9999] w-52 rounded-lg border border-zinc-700/80 bg-zinc-950/98 py-1.5 text-xs text-zinc-200 shadow-2xl backdrop-blur-md select-none"
-          onMouseDown={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-        >
-          {/* 段落子菜单 */}
-          <div
-            className="relative px-3 py-1.5 flex items-center justify-between hover:bg-zinc-800/80 cursor-pointer rounded-sm"
-            onMouseEnter={() => setHoverSubmenu("heading")}
-          >
-            <span>段落格式</span>
-            <span className="text-zinc-500 text-[10px]">▸</span>
-
-            {hoverSubmenu === "heading" && (
-              <div className="absolute left-full top-0 ml-1 w-36 rounded-lg border border-zinc-700/80 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur-md">
-                <button
-                  onClick={() => insertHeading(1)}
-                  className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                >
-                  <span>一级标题</span>
-                  <span className="text-zinc-500 text-[10px]">H1</span>
-                </button>
-                <button
-                  onClick={() => insertHeading(2)}
-                  className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                >
-                  <span>二级标题</span>
-                  <span className="text-zinc-500 text-[10px]">H2</span>
-                </button>
-                <button
-                  onClick={() => insertHeading(3)}
-                  className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                >
-                  <span>三级标题</span>
-                  <span className="text-zinc-500 text-[10px]">H3</span>
-                </button>
-                <button
-                  onClick={() => insertHeading(4)}
-                  className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                >
-                  <span>四级标题</span>
-                  <span className="text-zinc-500 text-[10px]">H4</span>
-                </button>
-                <div className="my-1 border-t border-zinc-800" />
-                <button
-                  onClick={() => insertHeading(0)}
-                  className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                >
-                  <span>普通段落</span>
-                  <span className="text-zinc-500 text-[10px]">P</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* 字体格式子菜单 */}
-          <div
-            className="relative px-3 py-1.5 flex items-center justify-between hover:bg-zinc-800/80 cursor-pointer rounded-sm"
-            onMouseEnter={() => setHoverSubmenu("format")}
-          >
-            <span>字体样式</span>
-            <span className="text-zinc-500 text-[10px]">▸</span>
-
-            {hoverSubmenu === "format" && (
-              <div className="absolute left-full top-0 ml-1 w-36 rounded-lg border border-zinc-700/80 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur-md">
-                <button
-                  onClick={() => execFormat("bold")}
-                  className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                >
-                  <span className="font-bold">加粗</span>
-                  <span className="text-zinc-500 text-[10px]">Ctrl+B</span>
-                </button>
-                <button
-                  onClick={() => execFormat("italic")}
-                  className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                >
-                  <span className="italic">斜体</span>
-                  <span className="text-zinc-500 text-[10px]">Ctrl+I</span>
-                </button>
-                <button
-                  onClick={() => execFormat("strikeThrough")}
-                  className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                >
-                  <span className="line-through">删除线</span>
-                </button>
-                <button
-                  onClick={() => insertHtmlAtCursor("<code>行内代码</code> ")}
-                  className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                >
-                  <span className="font-mono text-sky-400">&lt;代码&gt;</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="my-1 border-t border-zinc-800" />
-
-          {/* 插入元素 */}
-          <button
-            onClick={() => {
-              setContextMenu(null);
-              setTableModalOpen(true);
-            }}
-            onMouseEnter={() => setHoverSubmenu(null)}
-            className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
-          >
-            <span>插入表格…</span>
-            <span className="text-zinc-500 text-[10px]">Table</span>
-          </button>
-
-          <button
-            onClick={insertCodeBlock}
-            onMouseEnter={() => setHoverSubmenu(null)}
-            className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
-          >
-            <span>代码块</span>
-            <span className="text-zinc-500 text-[10px]">```</span>
-          </button>
-
-          <button
-            onClick={insertBlockquote}
-            onMouseEnter={() => setHoverSubmenu(null)}
-            className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
-          >
-            <span>引用块</span>
-            <span className="text-zinc-500 text-[10px]">&gt;</span>
-          </button>
-
-          <button
-            onClick={insertUnorderedList}
-            onMouseEnter={() => setHoverSubmenu(null)}
-            className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
-          >
-            <span>无序列表</span>
-            <span className="text-zinc-500 text-[10px]">•</span>
-          </button>
-
-          <button
-            onClick={insertOrderedList}
-            onMouseEnter={() => setHoverSubmenu(null)}
-            className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
-          >
-            <span>有序列表</span>
-            <span className="text-zinc-500 text-[10px]">1.</span>
-          </button>
-
-          <button
-            onClick={insertTaskItem}
-            onMouseEnter={() => setHoverSubmenu(null)}
-            className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
-          >
-            <span>待办清单</span>
-            <span className="text-zinc-500 text-[10px]">☑</span>
-          </button>
-
-          <button
-            onClick={insertHorizontalRule}
-            onMouseEnter={() => setHoverSubmenu(null)}
-            className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
-          >
-            <span>分割线</span>
-            <span className="text-zinc-500 text-[10px]">---</span>
-          </button>
-
-          {/* 表格专属快捷操作 */}
-          {contextMenu.inTable && (
-            <>
-              <div className="my-1 border-t border-zinc-800" />
-              <div
-                className="relative px-3 py-1.5 flex items-center justify-between hover:bg-zinc-800/80 cursor-pointer rounded-sm text-sky-400"
-                onMouseEnter={() => setHoverSubmenu("table")}
-              >
-                <span>表格操作</span>
-                <span className="text-zinc-500 text-[10px]">▸</span>
-
-                {hoverSubmenu === "table" && (
-                  <div className="absolute left-full top-0 ml-1 w-36 rounded-lg border border-zinc-700/80 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur-md text-zinc-200">
-                    <button
-                      onClick={() => {
-                        addTableRow();
-                        setContextMenu(null);
-                      }}
-                      className="flex w-full items-center px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                    >
-                      在下方插入行
-                    </button>
-                    <button
-                      onClick={() => {
-                        removeTableRow();
-                        setContextMenu(null);
-                      }}
-                      className="flex w-full items-center px-3 py-1 text-left text-amber-400 hover:bg-sky-600 hover:text-white"
-                    >
-                      删除当前行
-                    </button>
-                    <button
-                      onClick={() => {
-                        addTableCol();
-                        setContextMenu(null);
-                      }}
-                      className="flex w-full items-center px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
-                    >
-                      在右侧插入列
-                    </button>
-                    <button
-                      onClick={() => {
-                        removeTableCol();
-                        setContextMenu(null);
-                      }}
-                      className="flex w-full items-center px-3 py-1 text-left text-amber-400 hover:bg-sky-600 hover:text-white"
-                    >
-                      删除当前列
-                    </button>
-                    <div className="my-1 border-t border-zinc-800" />
-                    <button
-                      onClick={() => {
-                        deleteEntireTable();
-                        setContextMenu(null);
-                      }}
-                      className="flex w-full items-center px-3 py-1 text-left text-red-400 hover:bg-red-600 hover:text-white"
-                    >
-                      删除整个表格
-                    </button>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+        <MarkdownContextMenu
+          contextMenu={contextMenu}
+          hoverSubmenu={hoverSubmenu}
+          onHoverSubmenu={setHoverSubmenu}
+          onClose={() => setContextMenu(null)}
+          onInsertHeading={insertHeading}
+          onExecFormat={execFormat}
+          onInsertInlineCode={() => insertHtmlAtCursor("<code>行内代码</code> ")}
+          onOpenInsertTable={() => setTableModalOpen(true)}
+          onInsertCodeBlock={insertCodeBlock}
+          onInsertBlockquote={insertBlockquote}
+          onInsertUnorderedList={insertUnorderedList}
+          onInsertOrderedList={insertOrderedList}
+          onInsertTaskItem={insertTaskItem}
+          onInsertHorizontalRule={insertHorizontalRule}
+          onAddTableRow={addTableRow}
+          onRemoveTableRow={removeTableRow}
+          onAddTableCol={addTableCol}
+          onRemoveTableCol={removeTableCol}
+          onDeleteEntireTable={deleteEntireTable}
+        />
       )}
 
       {/* 插入表格弹窗（Modal） */}
       {tableModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-          onClick={() => setTableModalOpen(false)}
-        >
-          <div
-            className="w-80 rounded-xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-zinc-800">
-              <span className="font-semibold text-sm text-zinc-200">插入表格</span>
-              <button
-                onClick={() => setTableModalOpen(false)}
-                className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-                title="关闭"
-              >
-                <IconClose size={14} />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div className="flex items-center justify-between text-xs">
-                <label className="text-zinc-400">行数 (Rows)：</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={30}
-                  value={modalRows}
-                  onChange={(e) => setModalRows(Number(e.target.value))}
-                  className="w-24 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-center font-mono text-xs text-zinc-200 outline-none focus:border-sky-500"
-                />
-              </div>
-
-              <div className="flex items-center justify-between text-xs">
-                <label className="text-zinc-400">列数 (Columns)：</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={modalCols}
-                  onChange={(e) => setModalCols(Number(e.target.value))}
-                  className="w-24 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-center font-mono text-xs text-zinc-200 outline-none focus:border-sky-500"
-                />
-              </div>
-            </div>
-
-            <div className="mt-6 flex justify-end gap-2 text-xs">
-              <button
-                onClick={() => setTableModalOpen(false)}
-                className="rounded border border-zinc-700 px-3 py-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => insertCustomTable(modalRows, modalCols)}
-                className="rounded bg-sky-600 px-4 py-1.5 font-medium text-white hover:bg-sky-500 transition-colors"
-              >
-                插入表格
-              </button>
-            </div>
-          </div>
-        </div>
+        <TableInsertModal
+          rows={modalRows}
+          cols={modalCols}
+          onRowsChange={setModalRows}
+          onColsChange={setModalCols}
+          onClose={() => setTableModalOpen(false)}
+          onConfirm={() => insertCustomTable(modalRows, modalCols)}
+        />
       )}
     </div>
   );

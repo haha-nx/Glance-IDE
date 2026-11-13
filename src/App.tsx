@@ -1,21 +1,36 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import { TitleBar } from "./components/common/TitleBar";
+import { ToastHost } from "./components/common/ToastHost";
 import { TooltipLayer } from "./components/common/TooltipLayer";
 import { ActivityBar } from "./components/common/ActivityBar";
 import { StatusBar } from "./components/common/StatusBar";
 import { ExplorerPanel } from "./components/explorer/ExplorerPanel";
-import { SearchPanel } from "./components/search/SearchPanel";
-import { GitPanel } from "./components/git/GitPanel";
-import { RemotePanel } from "./components/remote/RemotePanel";
-import { DiscoveryPanel } from "./components/discovery/DiscoveryPanel";
 import { EditorArea } from "./components/editor/EditorArea";
 import { useGlobalSave } from "./components/editor/MonacoHost";
-import { TerminalPanel } from "./components/terminal/TerminalPanel";
 import { SaveConflictModal, UnsavedCloseModal } from "./components/editor/Dialogs";
-import { SettingsModal, type SettingsSection } from "./components/common/SettingsModal";
+import type { SettingsSection } from "./components/common/SettingsModal";
+
+const SearchPanel = lazy(() =>
+  import("./components/search/SearchPanel").then((m) => ({ default: m.SearchPanel })),
+);
+const GitPanel = lazy(() =>
+  import("./components/git/GitPanel").then((m) => ({ default: m.GitPanel })),
+);
+const RemotePanel = lazy(() =>
+  import("./components/remote/RemotePanel").then((m) => ({ default: m.RemotePanel })),
+);
+const DiscoveryPanel = lazy(() =>
+  import("./components/discovery/DiscoveryPanel").then((m) => ({ default: m.DiscoveryPanel })),
+);
+const TerminalPanel = lazy(() =>
+  import("./components/terminal/TerminalPanel").then((m) => ({ default: m.TerminalPanel })),
+);
+const SettingsModal = lazy(() =>
+  import("./components/common/SettingsModal").then((m) => ({ default: m.SettingsModal })),
+);
 import { tabsStore } from "./stores/tabs";
 import { explorerStore } from "./stores/explorer";
 import { gitStore } from "./stores/git";
@@ -25,251 +40,18 @@ import {
   DEFAULT_SETTINGS,
   settingsStore,
 } from "./stores/settings";
-import { requestApplyUpdate, updaterStore } from "./stores/updater";
-import { calcPercent, formatBytes, formatSpeed } from "./lib/format";
+import { updaterStore } from "./stores/updater";
 import { workspaceApi } from "./services/workspace";
 import { appApi } from "./services/files";
 import { sshApi } from "./services/ssh";
 import { CmdError, type ConnectionProfileDto } from "./types/ssh";
 import { isPrimaryWindow } from "./lib/windowState";
-import { Button, Modal, PrimaryButton } from "./components/common/Modal";
-import { IconWarning } from "./components/common/icons";
-
-/** 窗口关闭时若有未保存更改，先确认（未保存提示） */
-function useCloseGuard(onBlocked: () => void): void {
-  useEffect(() => {
-    const win = getCurrentWindow();
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-    const promise = win.onCloseRequested((event) => {
-      if (tabsStore.getState().hasDirty()) {
-        event.preventDefault();
-        onBlocked();
-      }
-    });
-    void promise.then((fn) => {
-      if (disposed) {
-        fn();
-      } else {
-        unlisten = fn;
-      }
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [onBlocked]);
-}
-
-const ROOT_KEY = "glance.recentRoot";
-
-interface WorkspacePersistenceProps {
-  onSshReconnectFailed: (profile: ConnectionProfileDto, reason: string) => void;
-  onPanelRestored: (panel: string) => void;
-}
-
-/** 启动恢复 + 变更持久化（含 SSH 自动重连与失败弹窗） */
-function useWorkspacePersistence({
-  onSshReconnectFailed,
-  onPanelRestored,
-}: WorkspacePersistenceProps) {
-  const hasInitializedRef = useRef(false);
-  const callbacksRef = useRef({ onSshReconnectFailed, onPanelRestored });
-  callbacksRef.current = { onSshReconnectFailed, onPanelRestored };
-
-  // 恢复（如果是新开窗口或者指定了自连参数，跳过常规恢复；生命周期内严格仅执行一次）
-  useEffect(() => {
-    if (hasInitializedRef.current) return;
-    hasInitializedRef.current = true;
-
-    if (!isPrimaryWindow()) {
-      return;
-    }
-
-    void (async () => {
-      try {
-        let root: string | null = null;
-        try {
-          root = await workspaceApi.getUiState("workspace.root");
-        } catch {
-          /* 数据库不可用时退回 localStorage */
-        }
-        root = root ?? localStorage.getItem(ROOT_KEY);
-
-        let lastProfileId: string | null = null;
-        try {
-          lastProfileId = await workspaceApi.getUiState("workspace.lastSshProfileId");
-        } catch {}
-        lastProfileId = lastProfileId ?? localStorage.getItem("glance.lastSshProfileId");
-
-        let lastPanel: string | null = null;
-        try {
-          lastPanel = await workspaceApi.getUiState("workspace.activePanel");
-        } catch {}
-        lastPanel = lastPanel ?? localStorage.getItem("glance.activePanel");
-        if (lastPanel) {
-          callbacksRef.current.onPanelRestored(lastPanel);
-        }
-
-        let tabsJson: string | null = null;
-        try {
-          tabsJson = await workspaceApi.getUiState("workspace.tabs");
-        } catch {}
-
-        // 判断是否需要自动重连 SSH
-        const isRemoteWorkspace = !!root && root.startsWith("remote://");
-        const shouldReconnectSsh =
-          isRemoteWorkspace ||
-          (!!lastProfileId && (lastPanel === "remote" || lastPanel === "ssh"));
-
-        if (shouldReconnectSsh) {
-          let targetProfile: ConnectionProfileDto | undefined;
-          try {
-            const profiles = await sshApi.listProfiles();
-            if (lastProfileId) {
-              targetProfile = profiles.find((p) => p.id === lastProfileId);
-            }
-            if (!targetProfile && isRemoteWorkspace && root) {
-              const devMatch = root.match(/^remote:\/\/([^/]+)/);
-              const devId = devMatch ? devMatch[1] : null;
-              if (devId) {
-                targetProfile = profiles.find((p) =>
-                  p.identities?.some((i) => i.id === devId),
-                );
-              }
-            }
-            if (
-              !targetProfile &&
-              profiles.length === 1 &&
-              (lastPanel === "remote" || isRemoteWorkspace)
-            ) {
-              targetProfile = profiles[0];
-            }
-
-            if (targetProfile) {
-              const outcome = await sshApi.connectProfile(targetProfile.id);
-              if (outcome.status === "connected") {
-                explorerStore.getState().invalidateRemote(outcome.deviceIdentityId);
-                window.dispatchEvent(
-                  new CustomEvent("glance:session-connected", {
-                    detail: { deviceIdentityId: outcome.deviceIdentityId, sessionId: outcome.sessionId },
-                  }),
-                );
-
-                // 恢复工作区根目录
-                let finalRoot = root;
-                if (finalRoot && finalRoot.startsWith("remote://")) {
-                  const subpath = finalRoot.replace(/^remote:\/\/[^/]+/, "");
-                  finalRoot = `remote://${outcome.deviceIdentityId}${subpath}`;
-                } else {
-                  const home = await sshApi.remoteHome(outcome.sessionId);
-                  const cleanHome = home.startsWith("/") ? home : `/${home}`;
-                  finalRoot = `remote://${outcome.deviceIdentityId}${cleanHome}`;
-                }
-                await explorerStore.getState().openRoot(finalRoot);
-
-                // 恢复已打开的远程文件标签
-                if (tabsJson) {
-                  try {
-                    const parsed = JSON.parse(tabsJson) as {
-                      paths?: string[];
-                      active?: string;
-                    };
-                    for (const p of parsed.paths ?? []) {
-                      let finalP = p;
-                      if (p.startsWith("remote://")) {
-                        const sub = p.replace(/^remote:\/\/[^/]+/, "");
-                        finalP = `remote://${outcome.deviceIdentityId}${sub}`;
-                      }
-                      await tabsStore.getState().openFileByPath(finalP, { preserveExisting: true });
-                    }
-                    if (parsed.active) {
-                      let finalActive = parsed.active;
-                      if (finalActive.startsWith("remote://")) {
-                        const sub = finalActive.replace(/^remote:\/\/[^/]+/, "");
-                        finalActive = `remote://${outcome.deviceIdentityId}${sub}`;
-                      }
-                      const { toModelUri } = await import("./lib/models");
-                      tabsStore.getState().setActive(toModelUri(finalActive));
-                    }
-                  } catch {}
-                }
-                return;
-              } else {
-                // 重连未成功（如设备指纹不匹配、密码错误、网络不可达等）
-                const reason =
-                  outcome.status === "networkError" || outcome.status === "authFailed"
-                    ? outcome.message
-                    : outcome.status === "identityChanged"
-                      ? "远程设备指纹与历史记录不一致，连接被安全阻断"
-                      : "需核对并登记远程设备身份";
-                callbacksRef.current.onSshReconnectFailed(targetProfile, reason);
-                return;
-              }
-            }
-          } catch (err) {
-            console.error("SSH 自动重连异常:", err);
-            if (targetProfile) {
-              const reason = err instanceof CmdError ? err.message : String(err);
-              callbacksRef.current.onSshReconnectFailed(targetProfile, reason);
-              return;
-            }
-          }
-        }
-
-        // 常规本地/WSL 工作区恢复
-        if (root && !root.startsWith("remote://")) {
-          await explorerStore.getState().openRoot(root);
-        }
-        if (tabsJson) {
-          const parsed = JSON.parse(tabsJson) as { paths?: string[]; active?: string };
-          for (const p of parsed.paths ?? []) {
-            if (!p.startsWith("remote://")) {
-              await tabsStore.getState().openFileByPath(p, { preserveExisting: true });
-            }
-          }
-          if (parsed.active && !parsed.active.startsWith("remote://")) {
-            const { toModelUri } = await import("./lib/models");
-            tabsStore.getState().setActive(toModelUri(parsed.active));
-          }
-        }
-      } catch (err) {
-        console.warn("工作区恢复失败", err);
-      }
-    })();
-  }, []);
-
-  // 标签持久化（防抖 800ms）
-  // 非主窗口不写入，避免覆盖主窗口的工作区状态
-  useEffect(() => {
-    if (!isPrimaryWindow()) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const unsub = tabsStore.subscribe((s) => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        const paths = s.tabs.filter((t) => !t.error && !t.diff).map((t) => t.path);
-        const active = s.tabs.find((t) => t.uri === s.activeId && !t.diff);
-        const payload = JSON.stringify({ paths, active: active?.path ?? null });
-        void workspaceApi.setUiState("workspace.tabs", payload).catch(() => {});
-      }, 800);
-    });
-    return () => {
-      unsub();
-      if (timer) clearTimeout(timer);
-    };
-  }, []);
-
-  // 根目录持久化（非主窗口不写入）
-  useEffect(() => {
-    if (!isPrimaryWindow()) return;
-    const unsub = explorerStore.subscribe((s) => {
-      if (s.rootPath) {
-        void workspaceApi.setUiState("workspace.root", s.rootPath).catch(() => {});
-      }
-    });
-    return unsub;
-  }, []);
-}
+import {
+  AppOverlays,
+  type SshLostState,
+  type SshReconnectFailState,
+} from "./components/common/AppOverlays";
+import { useCloseGuard, useWorkspacePersistence } from "./hooks/useWorkspacePersistence";
 
 export function App() {
   const [activePanel, setActivePanel] = useState<string>("explorer");
@@ -281,27 +63,12 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [resizing, setResizing] = useState<"sidebar" | "bottom" | null>(null);
-  const [sshReconnectFail, setSshReconnectFail] = useState<{
-    profile: ConnectionProfileDto;
-    reason: string;
-  } | null>(null);
+  const [sshReconnectFail, setSshReconnectFail] = useState<SshReconnectFailState | null>(null);
   /** 运行中的 SSH 会话意外掉线（设备关机 / 网络中断） */
-  const [sshLost, setSshLost] = useState<{
-    sessionId: string;
-    profileId: string;
-    deviceIdentityId: string;
-    deviceName: string | null;
-    endpoint: string;
-  } | null>(null);
+  const [sshLost, setSshLost] = useState<SshLostState | null>(null);
 
   const sidebarWidth = settingsStore((s) => s.sidebarWidth);
   const bottomPanelHeight = settingsStore((s) => s.bottomPanelHeight);
-  const updatePromptVisible = updaterStore((s) => s.promptVisible);
-  const updateResult = updaterStore((s) => s.result);
-  const updateDownloading = updaterStore((s) => s.downloading);
-  const updateDownloadProgress = updaterStore((s) => s.downloadProgress);
-  const updateDownloadResult = updaterStore((s) => s.downloadResult);
-  const updateApplying = updaterStore((s) => s.applying);
   const [pendingUpdatePath, setPendingUpdatePath] = useState<string | null>(null);
 
   const handleSshReconnectFailed = useCallback(
@@ -751,6 +518,7 @@ export function App() {
   return (
     <div className="flex h-full flex-col bg-[var(--glance-bg)] overflow-hidden select-none">
       <TooltipLayer />
+      <ToastHost />
       {/* 顶部单行自定义标题导航栏 */}
       <TitleBar
         onToggleTerminal={() => setBottomPanelOpen((v) => !v)}
@@ -777,12 +545,20 @@ export function App() {
           >
             <div className="min-h-0 flex-1 overflow-hidden">
               {activePanel === "explorer" && <ExplorerPanel />}
-              {activePanel === "search" && <SearchPanel />}
-              {activePanel === "git" && <GitPanel />}
-              {(activePanel === "remote" || activePanel === "ssh" || activePanel === "wsl") && (
-                <RemotePanel />
-              )}
-              {activePanel === "discovery" && <DiscoveryPanel />}
+              <Suspense
+                fallback={
+                  <div className="flex h-full items-center justify-center p-4 text-xs text-zinc-500">
+                    正在加载面板...
+                  </div>
+                }
+              >
+                {activePanel === "search" && <SearchPanel />}
+                {activePanel === "git" && <GitPanel />}
+                {(activePanel === "remote" || activePanel === "ssh" || activePanel === "wsl") && (
+                  <RemotePanel />
+                )}
+                {activePanel === "discovery" && <DiscoveryPanel />}
+              </Suspense>
             </div>
             {/* 侧边栏右边缘拖拽调节手柄 */}
             <div
@@ -829,13 +605,15 @@ export function App() {
                   }`}
                 />
               )}
-              <TerminalPanel
-                visible={bottomPanelOpen}
-                onClose={() => setBottomPanelOpen(false)}
-                isMaximized={terminalMaximized}
-                onToggleMaximize={() => setTerminalMaximized((v) => !v)}
-                onTerminalCountChange={setTerminalCount}
-              />
+              <Suspense fallback={null}>
+                <TerminalPanel
+                  visible={bottomPanelOpen}
+                  onClose={() => setBottomPanelOpen(false)}
+                  isMaximized={terminalMaximized}
+                  onToggleMaximize={() => setTerminalMaximized((v) => !v)}
+                  onTerminalCountChange={setTerminalCount}
+                />
+              </Suspense>
             </div>
           )}
         </div>
@@ -859,288 +637,33 @@ export function App() {
 
       {/* 设置界面 */}
       {settingsOpen && (
-        <SettingsModal
-          initialSection={settingsSection}
-          onClose={() => setSettingsOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <SettingsModal
+            initialSection={settingsSection}
+            onClose={() => setSettingsOpen(false)}
+          />
+        </Suspense>
       )}
 
-      {/* 仅在「自动检测更新」开启且检测到新版本时展示的右下角更新提示 */}
-      {updatePromptVisible && updateResult?.hasUpdate && (
-        <div className="fixed bottom-9 right-4 z-40 w-80 rounded-lg border border-sky-500/50 bg-zinc-900 p-3.5 text-xs text-zinc-200 shadow-2xl">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-1.5 font-semibold text-zinc-100">
-                <span className="h-2 w-2 rounded-full bg-sky-400" />
-                <span>发现新版本 v{updateResult.latestVersion}</span>
-              </div>
-              <p className="mt-1 text-[11px] text-zinc-400">
-                当前版本 v{updateResult.currentVersion}，GitHub 端已发布新版更新。
-              </p>
-            </div>
-            <button
-              onClick={() => updaterStore.getState().dismissPrompt()}
-              className="flex h-6 w-6 items-center justify-center rounded text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
-              title="关闭"
-            >
-              ✕
-            </button>
-          </div>
-          {updateDownloading && updateDownloadProgress && (
-            <div className="mt-2.5 space-y-1">
-              <div className="flex items-center justify-between text-[11px] text-zinc-400">
-                <span>正在下载更新…</span>
-                <span className="font-mono text-sky-400">
-                  {calcPercent(
-                    updateDownloadProgress.downloadedBytes,
-                    updateDownloadProgress.totalBytes,
-                  )}
-                  %
-                  {updateDownloadProgress.speedBytesPerSec > 0
-                    ? ` · ${formatSpeed(updateDownloadProgress.speedBytesPerSec)}`
-                    : ""}
-                </span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-                <div
-                  className="h-full bg-sky-500 transition-all duration-150"
-                  style={{
-                    width: `${calcPercent(
-                      updateDownloadProgress.downloadedBytes,
-                      updateDownloadProgress.totalBytes,
-                    )}%`,
-                  }}
-                />
-              </div>
-            </div>
-          )}
-          {updateDownloadResult && (
-            <p className="mt-2 rounded border border-emerald-700/50 bg-emerald-950/30 px-2 py-1 text-[11px] text-emerald-300">
-              {updateDownloadResult.installMode === "manual"
-                ? `已下载：${updateDownloadResult.savedPath}`
-                : `更新包已就绪 (${formatBytes(updateDownloadResult.size)})，可一键重启完成升级`}
-            </p>
-          )}
-          <div className="mt-3 flex items-center justify-end gap-2">
-            <Button
-              onClick={() => {
-                updaterStore.getState().dismissPrompt();
-                setSettingsSection("updates");
-                setSettingsOpen(true);
-              }}
-              className="border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-[11px] text-zinc-300 hover:bg-zinc-700"
-            >
-              查看详情
-            </Button>
-            {updateDownloading ? (
-              <Button
-                onClick={() => void updaterStore.getState().cancelDownload()}
-                className="border border-zinc-700 bg-zinc-800 px-2.5 py-1 text-[11px] text-red-300 hover:bg-zinc-700"
-              >
-                取消下载
-              </Button>
-            ) : updateDownloadResult ? (
-              <PrimaryButton
-                disabled={updateApplying}
-                onClick={() => requestApplyUpdate(updateDownloadResult.savedPath)}
-                className="px-2.5 py-1 text-[11px]"
-              >
-                {updateApplying
-                  ? "正在准备重启…"
-                  : updateDownloadResult.installMode === "manual"
-                    ? "启动安装"
-                    : "立即重启更新"}
-              </PrimaryButton>
-            ) : (
-              updateResult.assetUrl && (
-                <PrimaryButton
-                  disabled={updateDownloading}
-                  onClick={() => void updaterStore.getState().downloadLatestInstaller()}
-                  className="px-2.5 py-1 text-[11px]"
-                >
-                  下载更新
-                </PrimaryButton>
-              )
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* 应用更新重启前未保存文件确认 */}
-      {pendingUpdatePath && (
-        <Modal
-          title="安装更新并重启"
-          onClose={() => setPendingUpdatePath(null)}
-          footer={
-            <>
-              <Button onClick={() => setPendingUpdatePath(null)}>取消</Button>
-              <Button
-                onClick={() => {
-                  const p = pendingUpdatePath;
-                  setPendingUpdatePath(null);
-                  void updaterStore.getState().applyUpdate(p);
-                }}
-                className="text-red-400 hover:text-red-300"
-              >
-                丢弃并更新
-              </Button>
-              <PrimaryButton
-                onClick={async () => {
-                  const p = pendingUpdatePath;
-                  const ok = await tabsStore.getState().saveAll();
-                  if (ok) {
-                    setPendingUpdatePath(null);
-                    void updaterStore.getState().applyUpdate(p);
-                  }
-                }}
-              >
-                全部保存并更新
-              </PrimaryButton>
-            </>
-          }
-        >
-          <p className="text-sm text-zinc-300">
-            有未保存的文件，重启以完成版本更新将丢失这些修改。是否先保存全部更改？
-          </p>
-        </Modal>
-      )}
-
-      {/* 退出应用未保存确认 */}
-      {pendingWindowClose && (
-        <Modal
-          title="退出应用"
-          onClose={() => setPendingWindowClose(false)}
-          footer={
-            <>
-              <Button onClick={() => setPendingWindowClose(false)}>取消</Button>
-              <Button onClick={() => void closeAnyway()} className="text-red-400 hover:text-red-300">
-                丢弃并退出
-              </Button>
-              <PrimaryButton onClick={() => void saveAllAndClose()}>全部保存并退出</PrimaryButton>
-            </>
-          }
-        >
-          <p className="text-sm text-zinc-300">有未保存的文件，退出将丢失这些修改。是否保存全部更改？</p>
-        </Modal>
-      )}
-
-      {/* 远程 SSH 设备自动重连失败弹窗 */}
-      {sshReconnectFail && (
-        <Modal
-          title="无法连接到远程设备"
-          onClose={() => setSshReconnectFail(null)}
-          footer={
-            <div className="flex w-full items-center justify-between">
-              <Button
-                onClick={() => {
-                  setSshReconnectFail(null);
-                  setActivePanel("remote");
-                }}
-              >
-                打开远程配置
-              </Button>
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => {
-                    setSshReconnectFail(null);
-                    void explorerStore.getState().closeRoot();
-                    setActivePanel("explorer");
-                  }}
-                >
-                  切换到本地
-                </Button>
-                <PrimaryButton
-                  onClick={() => {
-                    const prof = sshReconnectFail.profile;
-                    void handleRetrySsh(prof);
-                  }}
-                >
-                  重试连接
-                </PrimaryButton>
-              </div>
-            </div>
-          }
-        >
-          <div className="space-y-3 text-sm">
-            <div className="flex items-center gap-2 text-amber-400">
-              <IconWarning size={18} />
-              <span className="font-medium text-zinc-100">
-                自动重新连接远程 SSH 设备失败
-              </span>
-            </div>
-            <p className="text-xs text-zinc-300">
-              检测到您上次退出前处于远程工作区（
-              <span className="font-mono text-sky-400">
-                {sshReconnectFail.profile.name || sshReconnectFail.profile.host}:
-                {sshReconnectFail.profile.port}
-              </span>
-              ），本次启动尝试连接失败：
-            </p>
-            <div className="rounded border border-red-900/60 bg-red-950/40 p-2.5 font-mono text-xs text-red-300 break-all select-text">
-              {sshReconnectFail.reason}
-            </div>
-            <p className="text-[11px] text-zinc-500">
-              您可以检查远端服务器网络与 SSH 服务状态后点击“重试连接”，或切换至本地工作区继续开发。
-            </p>
-          </div>
-        </Modal>
-      )}
-      {/* 运行中的 SSH 会话意外掉线（设备关机 / 断网） */}
-      {sshLost && (
-        <Modal
-          title="远程设备连接已断开"
-          onClose={() => setSshLost(null)}
-          footer={
-            <div className="flex w-full items-center justify-between">
-              <Button
-                onClick={() => {
-                  const lost = sshLost;
-                  setSshLost(null);
-                  void explorerStore.getState().closeRoot();
-                  setActivePanel("explorer");
-                  window.dispatchEvent(
-                    new CustomEvent("glance:session-disconnected", {
-                      detail: { deviceIdentityId: lost.deviceIdentityId },
-                    }),
-                  );
-                }}
-              >
-                断开连接
-              </Button>
-              <PrimaryButton
-                onClick={() => {
-                  const lost = sshLost;
-                  setSshLost(null);
-                  void handleReconnectLostSession(lost);
-                }}
-              >
-                重新连接
-              </PrimaryButton>
-            </div>
-          }
-        >
-          <div className="space-y-3 text-sm">
-            <div className="flex items-center gap-2 text-amber-400">
-              <IconWarning size={18} />
-              <span className="font-medium text-zinc-100">
-                与远程设备的连接已中断
-              </span>
-            </div>
-            <p className="text-xs text-zinc-300">
-              连接
-              <span className="mx-1 font-mono text-sky-400">
-                {sshLost.deviceName || sshLost.endpoint}
-                {sshLost.deviceName ? ` (${sshLost.endpoint})` : ""}
-              </span>
-              已断开，可能是设备关机、休眠或网络中断。远程文件操作与终端将不可用。
-            </p>
-            <p className="text-[11px] text-zinc-500">
-              选择「重新连接」重建会话并恢复远程工作区，或「断开连接」切回本地工作区。
-            </p>
-          </div>
-        </Modal>
-      )}
-
+      <AppOverlays
+        pendingUpdatePath={pendingUpdatePath}
+        onClearPendingUpdate={() => setPendingUpdatePath(null)}
+        pendingWindowClose={pendingWindowClose}
+        onCancelWindowClose={() => setPendingWindowClose(false)}
+        onCloseAnyway={() => void closeAnyway()}
+        onSaveAllAndClose={() => void saveAllAndClose()}
+        sshReconnectFail={sshReconnectFail}
+        onClearSshReconnectFail={() => setSshReconnectFail(null)}
+        onRetrySsh={(prof) => void handleRetrySsh(prof)}
+        sshLost={sshLost}
+        onClearSshLost={() => setSshLost(null)}
+        onReconnectLostSession={(lost) => void handleReconnectLostSession(lost)}
+        onOpenSettings={(section) => {
+          setSettingsSection(section);
+          setSettingsOpen(true);
+        }}
+        onSwitchPanel={setActivePanel}
+      />
     </div>
   );
 }

@@ -1,22 +1,23 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
+import { invokeIpc } from "../lib/ipc";
 import type { WslDistroDto } from "../types/wsl";
 import type { TerminalEvent, TaskResult } from "./terminal";
 
 export const wslApi = {
   async isAvailable(): Promise<boolean> {
     try {
-      return await invoke<boolean>("wsl_is_available");
+      return await invokeIpc<boolean>("wsl_is_available");
     } catch {
       return false;
     }
   },
 
   async listDistros(): Promise<WslDistroDto[]> {
-    return await invoke<WslDistroDto[]>("wsl_list_distros");
+    return await invokeIpc<WslDistroDto[]>("wsl_list_distros");
   },
 
   async getHome(distro: string): Promise<string> {
-    return await invoke<string>("wsl_distro_home", { distro });
+    return await invokeIpc<string>("wsl_distro_home", { distro });
   },
 
   async runTask(
@@ -28,7 +29,7 @@ export const wslApi = {
   ): Promise<TaskResult> {
     const channel = new Channel<TerminalEvent>();
     channel.onmessage = onOutput;
-    return await invoke<TaskResult>("wsl_run_task", {
+    return await invokeIpc<TaskResult>("wsl_run_task", {
       distro,
       cwd,
       command,

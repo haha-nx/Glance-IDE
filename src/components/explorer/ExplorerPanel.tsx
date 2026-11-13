@@ -5,7 +5,8 @@ import { tabsStore } from "../../stores/tabs";
 import { transferStore } from "../../stores/transfer";
 import { filesApi } from "../../services/files";
 import type { FileEntryDto } from "../../types/ipc";
-import { Button, Modal, PrimaryButton } from "../common/Modal";
+import { Button, DangerButton, Modal, PrimaryButton } from "../common/Modal";
+import { showErrorToast } from "../../stores/toast";
 import {
   IconClose,
   IconFolder,
@@ -202,7 +203,7 @@ export function ExplorerPanel() {
         trimmed.includes("\\") ||
         trimmed.includes("\0")
       ) {
-        alert("名称无效：不能为空、'.' / '..'，也不能包含 '/'、'\\' 或空字符。");
+        showErrorToast("名称无效：不能为空、'.' / '..'，也不能包含 '/'、'\\' 或空字符。");
         return;
       }
     }
@@ -240,7 +241,7 @@ export function ExplorerPanel() {
       }
       setDialog(null);
     } catch (err) {
-      alert(`操作失败：${err instanceof Error ? err.message : String(err)}`);
+      showErrorToast(`操作失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
     }
@@ -428,12 +429,18 @@ export function ExplorerPanel() {
           footer={
             <>
               <Button onClick={() => setDialog(null)}>取消</Button>
-              <PrimaryButton
-                onClick={submitDialog}
-                disabled={busy || (dialog.kind !== "delete" && input.trim().length === 0)}
-              >
-                {dialog.kind === "delete" ? "删除" : "确定"}
-              </PrimaryButton>
+              {dialog.kind === "delete" ? (
+                <DangerButton onClick={submitDialog} disabled={busy}>
+                  删除
+                </DangerButton>
+              ) : (
+                <PrimaryButton
+                  onClick={submitDialog}
+                  disabled={busy || input.trim().length === 0}
+                >
+                  确定
+                </PrimaryButton>
+              )}
             </>
           }
         >

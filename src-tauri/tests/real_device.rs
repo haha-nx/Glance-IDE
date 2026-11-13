@@ -241,7 +241,7 @@ async fn real_03_sftp_filesystem() {
     assert_eq!(sub.len(), 1);
     assert_eq!(sub[0].name, "renamed.txt");
     fs.delete("/tmp/glance-real-dir", true).await.unwrap();
-    assert!(!std::path::Path::new("/tmp/glance-real-dir").exists());
+    assert!(fs.list_dir("/tmp/glance-real-dir").await.is_err());
 }
 
 /// #4 PTY shell：提示符数据到达 + 命令回显（真实 shell 算术求值）+ 关闭清理

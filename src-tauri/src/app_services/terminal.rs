@@ -225,6 +225,7 @@ pub async fn open_pty(
 }
 
 /// 打开通用本地进程终端
+#[cfg(windows)]
 async fn open_process_terminal(
     registry: Arc<TerminalRegistry>,
     program: &str,

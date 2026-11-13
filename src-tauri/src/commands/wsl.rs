@@ -1,8 +1,11 @@
 //! WSL 相关 Tauri Commands。
 
+#[cfg(windows)]
 use std::process::Stdio;
 use tauri::State;
+#[cfg(windows)]
 use tokio::io::AsyncReadExt;
+#[cfg(windows)]
 use tokio::process::Command;
 
 use crate::app_services::wsl::{self, WslDistro};
@@ -10,6 +13,7 @@ use crate::commands::terminal::TaskResult;
 use crate::commands::CmdError;
 use crate::AppState;
 
+#[cfg(windows)]
 fn encode_payload(bytes: &[u8]) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(bytes)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 
 interface ModalProps {
   title: string;
@@ -10,9 +10,20 @@ interface ModalProps {
 
 export function Modal({ title, children, onClose, footer, width = 420 }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     ref.current?.focus();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onCloseRef.current?.();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   return (
@@ -24,11 +35,17 @@ export function Modal({ title, children, onClose, footer, width = 420 }: ModalPr
     >
       <div
         ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         tabIndex={-1}
         className="rounded-lg border border-zinc-700 bg-zinc-800 shadow-2xl outline-none"
         style={{ width, maxWidth: "calc(100vw - 32px)" }}
       >
-        <div className="border-b border-zinc-700 px-4 py-3 text-sm font-medium text-zinc-100">
+        <div
+          id={titleId}
+          className="border-b border-zinc-700 px-4 py-3 text-sm font-medium text-zinc-100"
+        >
           {title}
         </div>
         <div className="px-4 py-3 text-sm text-zinc-300">{children}</div>

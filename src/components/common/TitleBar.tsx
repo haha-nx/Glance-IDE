@@ -8,6 +8,8 @@ import { explorerStore } from "../../stores/explorer";
 import { tabsStore } from "../../stores/tabs";
 import { getOrCreateModel } from "../../lib/models";
 import { IS_MAC } from "../../lib/platform";
+import { showErrorToast, showToast } from "../../stores/toast";
+import { Button, Modal, PrimaryButton } from "./Modal";
 
 /** 快捷键文案：macOS 用 ⌘，Windows 用 Ctrl */
 const mod = IS_MAC ? "⌘" : "Ctrl+";
@@ -42,6 +44,9 @@ export function TitleBar({
 }: TitleBarProps) {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [createDialog, setCreateDialog] = useState<"file" | "folder" | null>(null);
+  const [createName, setCreateName] = useState("");
+  const [creating, setCreating] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
 
   const rootPath = explorerStore((s) => s.rootPath);
@@ -204,24 +209,8 @@ export function TitleBar({
     setActiveMenu(null);
     const root = explorerStore.getState().rootPath;
     if (root) {
-      const name = prompt("请输入新建文件名称（如 main.rs 或 doc.md）：");
-      const trimmed = name?.trim();
-      if (trimmed) {
-        const sep =
-          root.endsWith("/") || root.endsWith("\\")
-            ? ""
-            : root.includes("\\")
-              ? "\\"
-              : "/";
-        const cleanPath = `${root}${sep}${trimmed}`;
-        void filesApi
-          .createFile(cleanPath)
-          .then(async () => {
-            await explorerStore.getState().refresh(root);
-            await tabsStore.getState().openFileByPath(cleanPath);
-          })
-          .catch((err) => alert(`新建文件失败：${String(err)}`));
-      }
+      setCreateName("");
+      setCreateDialog("file");
     } else {
       const id = `local://untitled-${Date.now()}.txt`;
       getOrCreateModel(id, "", "untitled.txt");
@@ -246,23 +235,41 @@ export function TitleBar({
     setActiveMenu(null);
     const root = explorerStore.getState().rootPath;
     if (root) {
-      const name = prompt("请输入新建文件夹名称：");
-      const trimmed = name?.trim();
-      if (trimmed) {
-        const sep =
-          root.endsWith("/") || root.endsWith("\\")
-            ? ""
-            : root.includes("\\")
-              ? "\\"
-              : "/";
-        const cleanPath = `${root}${sep}${trimmed}`;
-        void filesApi
-          .createDir(cleanPath)
-          .then(() => explorerStore.getState().refresh(root))
-          .catch((err) => alert(`新建文件夹失败：${String(err)}`));
-      }
+      setCreateName("");
+      setCreateDialog("folder");
     } else {
-      alert("请先在资源管理器打开工作区文件夹");
+      showToast("请先在资源管理器打开工作区文件夹", "warning");
+    }
+  };
+
+  const submitCreateDialog = async () => {
+    const root = explorerStore.getState().rootPath;
+    const trimmed = createName.trim();
+    if (!root || !createDialog || !trimmed || creating) return;
+    if (trimmed === "." || trimmed === ".." || trimmed.includes("\0")) {
+      showErrorToast("名称无效：不能为 '.' / '..' 或包含空字符。");
+      return;
+    }
+    const sep =
+      root.endsWith("/") || root.endsWith("\\") ? "" : root.includes("\\") ? "\\" : "/";
+    const cleanPath = `${root}${sep}${trimmed}`;
+    setCreating(true);
+    try {
+      if (createDialog === "file") {
+        await filesApi.createFile(cleanPath);
+        await explorerStore.getState().refresh(root);
+        await tabsStore.getState().openFileByPath(cleanPath);
+      } else {
+        await filesApi.createDir(cleanPath);
+        await explorerStore.getState().refresh(root);
+      }
+      setCreateDialog(null);
+      setCreateName("");
+    } catch (err) {
+      const label = createDialog === "file" ? "新建文件" : "新建文件夹";
+      showErrorToast(`${label}失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -628,6 +635,41 @@ export function TitleBar({
           </svg>
         </button>
       </div>
+
+      {createDialog && (
+        <Modal
+          title={createDialog === "file" ? "新建文件" : "新建文件夹"}
+          onClose={() => !creating && setCreateDialog(null)}
+          footer={
+            <>
+              <Button onClick={() => setCreateDialog(null)} disabled={creating}>
+                取消
+              </Button>
+              <PrimaryButton
+                onClick={() => void submitCreateDialog()}
+                disabled={creating || createName.trim().length === 0}
+              >
+                {creating ? "创建中…" : "确定"}
+              </PrimaryButton>
+            </>
+          }
+        >
+          <input
+            autoFocus
+            value={createName}
+            onChange={(e) => setCreateName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !creating && createName.trim().length > 0) {
+                void submitCreateDialog();
+              }
+            }}
+            placeholder={
+              createDialog === "file" ? "输入文件名（如 main.rs 或 doc.md）" : "输入文件夹名称"
+            }
+            className="w-full rounded border border-zinc-600 bg-zinc-900 px-2.5 py-1.5 text-sm text-zinc-200 outline-none focus:border-sky-600"
+          />
+        </Modal>
+      )}
     </div>
   );
 }

@@ -15,7 +15,25 @@ export default defineConfig({
   build: {
     target: "es2022",
     outDir: "dist",
-    // Monaco 体积较大，提高分块阈值避免警告
-    chunkSizeWarningLimit: 8000,
+    chunkSizeWarningLimit: 5000,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/monaco-editor")) return "monaco";
+          if (id.includes("node_modules/@xterm")) return "xterm";
+          if (id.includes("node_modules/marked") || id.includes("node_modules/dompurify")) {
+            return "markdown";
+          }
+          if (
+            id.includes("node_modules/react") ||
+            id.includes("node_modules/react-dom") ||
+            id.includes("node_modules/zustand")
+          ) {
+            return "vendor";
+          }
+          return undefined;
+        },
+      },
+    },
   },
 });

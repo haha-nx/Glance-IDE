@@ -4,6 +4,7 @@
 pub mod app_services;
 pub mod commands;
 pub mod filesystem;
+pub mod logging;
 pub mod ssh;
 pub mod storage;
 
@@ -137,6 +138,12 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            let log_dir = app
+                .path()
+                .app_log_dir()
+                .unwrap_or_else(|_| data_dir.join("logs"));
+            logging::init(&log_dir);
+
             let db = Database::open(&data_dir.join("glance.db"))
                 .map_err(|e| std::io::Error::other(format!("数据库初始化失败: {e}")))?;
             log::info!("数据库已就绪: {}", data_dir.join("glance.db").display());

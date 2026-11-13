@@ -44,7 +44,7 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "Glance IDE $TAG" --notes-file release-notes.md
           else
-            gh release create "$TAG" --title "Glance IDE $TAG" --notes-file release-notes.md
+            gh release create "$TAG" --draft --title "Glance IDE $TAG" --notes-file release-notes.md
           fi
 
   build-macos:
@@ -67,12 +67,12 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build Tauri macOS application
         run: |
           npm run build
-          npm run tauri build -- --target universal-apple-darwin || npm run tauri build
+          npm run tauri build -- --target universal-apple-darwin
 
       - name: Fix macOS bundle & package in-place tar.gz / dmg
         run: |
@@ -93,16 +93,12 @@ jobs:
           hdiutil create -volname "Glance IDE" -srcfolder "$DMG_STAGING" -ov -format UDZO "release-artifacts/Glance.IDE_${VER}_universal.dmg"
           rm -rf "$DMG_STAGING"
 
-      - name: Upload macOS artifacts to Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ needs.prepare-release.outputs.tag }}"
-          echo "Target release tag: $TAG"
-          find release-artifacts -maxdepth 1 -type f | while read -r file; do
-            echo "Uploading $file..."
-            gh release upload "$TAG" "$file" --clobber
-          done
+      - name: Upload macOS workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release-artifacts
+          path: release-artifacts/*
+          if-no-files-found: error
 
   build-windows:
     name: Build Windows Installer
@@ -122,20 +118,57 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build Tauri Windows application
         run: |
           npm run build
           npm run tauri build
 
-      - name: Upload Windows artifacts to Release
+      - name: Collect Windows installers
         shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
+          $files = Get-ChildItem -Path "src-tauri/target" -Recurse -Include "*-setup.exe","*.msi"
+          if ($files.Count -eq 0) {
+            throw "No Windows installers found under src-tauri/target"
+          }
+          foreach ($file in $files) {
+            Copy-Item $file.FullName -Destination release-artifacts/ -Force
+          }
+
+      - name: Upload Windows workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-artifacts
+          path: release-artifacts/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Compute Checksums & Publish Release
+    needs: [prepare-release, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: staging
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          cd staging
+          rm -f SHA256SUMS.txt
+          LC_ALL=C
+          for f in *; do
+            [ -f "$f" ] && sha256sum "$f" >> SHA256SUMS.txt
+          done
+          cat SHA256SUMS.txt
+
+      - name: Upload assets & publish GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "${{ needs.prepare-release.outputs.tag }}"
-          Get-ChildItem -Path "src-tauri/target" -Recurse -Include "*-setup.exe","*.msi" | ForEach-Object {
-            Write-Host "Uploading $($_.FullName)..."
-            gh release upload $tag $_.FullName --clobber
-          }
+          TAG="${{ needs.prepare-release.outputs.tag }}"
+          gh release upload "$TAG" staging/* --clobber
+          gh release edit "$TAG" --draft=false

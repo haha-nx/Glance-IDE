@@ -9,115 +9,26 @@ import {
 import { explorerStore } from "../../stores/explorer";
 import { gitStore } from "../../stores/git";
 import { tabsStore } from "../../stores/tabs";
-import { Button, DangerButton, Modal, PrimaryButton } from "../common/Modal";
 import {
   IconChevronDown,
   IconChevronRight,
   IconGitBranch,
   IconPlus,
   IconRefresh,
-  IconTrash,
 } from "../common/icons";
 import { CommitGraph } from "./CommitGraph";
-
-const SCM_SPLIT_STORAGE_KEY = "glance:scm-split-ratio";
-const DEFAULT_SPLIT_RATIO = 0.52;
-
-function loadSavedSplitRatio(): number {
-  try {
-    const raw = localStorage.getItem(SCM_SPLIT_STORAGE_KEY);
-    if (!raw) return DEFAULT_SPLIT_RATIO;
-    const n = Number(raw);
-    if (Number.isFinite(n) && n >= 0.2 && n <= 0.85) return n;
-  } catch {
-    // 忽略本地存储读取异常
-  }
-  return DEFAULT_SPLIT_RATIO;
-}
-
-function statusColorClass(status: string): string {
-  switch (status) {
-    case "M":
-      return "text-amber-400";
-    case "A":
-      return "text-emerald-400";
-    case "D":
-      return "text-red-400";
-    case "U":
-      return "text-sky-400";
-    case "C":
-      return "text-red-300";
-    default:
-      return "text-zinc-400";
-  }
-}
-
-function splitPathParts(relPath: string): { name: string; dir: string } {
-  const norm = relPath.replace(/\\/g, "/");
-  const idx = norm.lastIndexOf("/");
-  if (idx < 0) return { name: norm, dir: "" };
-  return { name: norm.slice(idx + 1), dir: norm.slice(0, idx) };
-}
-
-function suggestWorktreePath(repoRoot: string, branchName: string): string {
-  const norm = repoRoot.replace(/\\/g, "/").replace(/\/+$/, "");
-  const slash = norm.lastIndexOf("/");
-  const parent = slash > 0 ? norm.slice(0, slash) : "";
-  const repoName = slash >= 0 ? norm.slice(slash + 1) : norm;
-  const safeBranch = (branchName.trim() || "feature")
-    .replace(/[\\/:*?"<>|\s]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return parent ? `${parent}/${repoName}-worktrees/${safeBranch || "wt"}` : `${repoName}-${safeBranch || "wt"}`;
-}
-
-function IconCheck({ size = 13 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.6}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 8.5 6.5 12 13 4.5" />
-    </svg>
-  );
-}
-
-function IconMore({ size = 13 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <circle cx="3.2" cy="8" r="1.2" />
-      <circle cx="8" cy="8" r="1.2" />
-      <circle cx="12.8" cy="8" r="1.2" />
-    </svg>
-  );
-}
-
-function IconWorktree({ size = 12 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.3}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="2" y="2.2" width="4.5" height="4.5" rx="1" />
-      <rect x="9.5" y="2.2" width="4.5" height="4.5" rx="1" />
-      <rect x="9.5" y="9.3" width="4.5" height="4.5" rx="1" />
-      <path d="M4.25 6.7v4.8H9.5M6.5 4.45h3" />
-    </svg>
-  );
-}
+import { GitModals } from "./GitModals";
+import {
+  ChangeRow,
+  DEFAULT_SPLIT_RATIO,
+  IconCheck,
+  IconMore,
+  IconWorktree,
+  loadSavedSplitRatio,
+  SCM_SPLIT_STORAGE_KEY,
+  splitPathParts,
+  suggestWorktreePath,
+} from "./gitPanelParts";
 
 /** 源代码管理侧边栏：上下两栏（「更改」+「图形」），支持拖拽调整比例 */
 export function GitPanel() {
@@ -1104,385 +1015,47 @@ export function GitPanel() {
         </div>
       )}
 
-      {/* 工作树 (Worktrees) 管理弹窗 */}
-      {wtManagerOpen && overview && activeRepoRoot && (
-        <Modal
-          title={`Git 工作树管理 (${overview.worktrees.length})`}
-          onClose={() => setWtManagerOpen(false)}
-          width={520}
-          footer={
-            <div className="flex w-full items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                {prunableCount > 0 && (
-                  <Button
-                    onClick={() =>
-                      void runAction("清理失效工作树", async () => {
-                        await gitApi.worktreePrune(activeRepoRoot);
-                        setNotice("已清理失效工作树记录");
-                      })
-                    }
-                  >
-                    清理失效记录 ({prunableCount})
-                  </Button>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Button onClick={() => setWtManagerOpen(false)}>关闭</Button>
-                <PrimaryButton
-                  onClick={() => {
-                    setWtManagerOpen(false);
-                    handleOpenAddWorktree();
-                  }}
-                >
-                  新建工作树
-                </PrimaryButton>
-              </div>
-            </div>
-          }
-        >
-          <div className="max-h-80 overflow-y-auto space-y-2 text-xs">
-            {overview.worktrees.map((wt) => (
-              <div
-                key={wt.path}
-                className={`rounded border px-3 py-2 ${
-                  wt.isCurrent
-                    ? "border-sky-500/40 bg-sky-500/10"
-                    : "border-zinc-800 bg-zinc-950/60"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex min-w-0 items-center gap-1.5 font-mono text-zinc-100">
-                    <IconGitBranch
-                      size={13}
-                      className={wt.isCurrent ? "shrink-0 text-sky-400" : "shrink-0 text-zinc-500"}
-                    />
-                    <span className="truncate font-medium">
-                      {wt.branch || (wt.isBare ? "(bare)" : `detached @ ${wt.head}`)}
-                    </span>
-                  </span>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {wt.isCurrent && (
-                      <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] text-sky-400">
-                        当前
-                      </span>
-                    )}
-                    {wt.isMain && !wt.isCurrent && (
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
-                        主树
-                      </span>
-                    )}
-                    {wt.isPrunable && (
-                      <span className="rounded bg-red-950/60 px-1.5 py-0.5 text-[10px] text-red-400">
-                        目录缺失
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-1 truncate font-mono text-[11px] text-zinc-500" title={wt.path}>
-                  {wt.path}
-                </div>
-
-                {!wt.isCurrent && !wt.isBare && (
-                  <div className="mt-2 flex items-center justify-end gap-1.5">
-                    {!wt.isPrunable && (
-                      <>
-                        <button
-                          onClick={() => {
-                            setWtManagerOpen(false);
-                            void explorerStore.getState().openRoot(wt.uri);
-                          }}
-                          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-300 hover:border-sky-500/50 hover:text-sky-400"
-                        >
-                          当前窗口切换
-                        </button>
-                        <button
-                          onClick={() => void appApi.openNewWindow(undefined, undefined, wt.uri)}
-                          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-300 hover:border-sky-500/50 hover:text-sky-400"
-                        >
-                          新窗口打开
-                        </button>
-                      </>
-                    )}
-                    {!wt.isMain && (
-                      <button
-                        onClick={() => {
-                          setForceRemoveWt(wt.isPrunable);
-                          setConfirmRemoveWt(wt);
-                        }}
-                        className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
-                        title="移除工作树"
-                      >
-                        <IconTrash size={13} />
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </Modal>
-      )}
-
-      {/* 新建工作树弹窗 */}
-      {wtModalOpen && overview && (
-        <Modal
-          title="新建 Git 工作树 (Worktree)"
-          onClose={() => setWtModalOpen(false)}
-          width={460}
-          footer={
-            <>
-              <Button onClick={() => setWtModalOpen(false)}>取消</Button>
-              <PrimaryButton
-                disabled={!wtBranch.trim() || !wtTargetPath.trim() || !!busyAction}
-                onClick={() => void handleCreateWorktree()}
-              >
-                {busyAction === "创建工作树" ? "创建中…" : "创建工作树"}
-              </PrimaryButton>
-            </>
-          }
-        >
-          <div className="space-y-3 text-xs">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setWtCreateBranch(true)}
-                className={`flex-1 rounded border py-1.5 font-medium ${
-                  wtCreateBranch
-                    ? "border-sky-500 bg-sky-600/20 text-sky-400"
-                    : "border-zinc-700 bg-zinc-900 text-zinc-400"
-                }`}
-              >
-                新建分支并创建工作树
-              </button>
-              <button
-                type="button"
-                onClick={() => setWtCreateBranch(false)}
-                className={`flex-1 rounded border py-1.5 font-medium ${
-                  !wtCreateBranch
-                    ? "border-sky-500 bg-sky-600/20 text-sky-400"
-                    : "border-zinc-700 bg-zinc-900 text-zinc-400"
-                }`}
-              >
-                基于已有分支创建
-              </button>
-            </div>
-
-            {wtCreateBranch ? (
-              <>
-                <div>
-                  <label className="mb-1 block text-zinc-400">新分支名称</label>
-                  <input
-                    value={wtBranch}
-                    onChange={(e) => handleWorktreeBranchChange(e.target.value)}
-                    placeholder="例如 feat/login-ui"
-                    className="w-full rounded border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 font-mono text-zinc-100 outline-none focus:border-sky-500"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-zinc-400">基准分支 / Commit（可选）</label>
-                  <input
-                    value={wtBaseRef}
-                    onChange={(e) => setWtBaseRef(e.target.value)}
-                    placeholder="留空则基于当前 HEAD"
-                    className="w-full rounded border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 font-mono text-zinc-100 outline-none focus:border-sky-500"
-                  />
-                </div>
-              </>
-            ) : (
-              <div>
-                <label className="mb-1 block text-zinc-400">选择已有分支</label>
-                <select
-                  value={wtBranch}
-                  onChange={(e) => handleWorktreeBranchChange(e.target.value)}
-                  className="w-full rounded border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 font-mono text-zinc-100 outline-none focus:border-sky-500"
-                >
-                  <option value="">-- 请选择分支 --</option>
-                  {overview.branches
-                    .filter((b) => !overview.worktrees.some((w) => w.branch === b.name))
-                    .map((b) => (
-                      <option key={b.name} value={b.name}>
-                        {b.name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-            )}
-
-            <div>
-              <label className="mb-1 block text-zinc-400">工作树保存目录</label>
-              <div className="flex gap-1.5">
-                <input
-                  value={wtTargetPath}
-                  onChange={(e) => {
-                    setWtTargetEdited(true);
-                    setWtTargetPath(e.target.value);
-                  }}
-                  placeholder="输入目标路径，例如 ../repo-wt/feat"
-                  className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 font-mono text-zinc-100 outline-none focus:border-sky-500"
-                />
-                {!rootPath.startsWith("remote://") && !rootPath.startsWith("wsl://") && (
-                  <Button
-                    onClick={() => void handlePickWorktreeDir()}
-                    className="border border-zinc-700 bg-zinc-900 px-2.5 text-xs text-zinc-300 hover:bg-zinc-700"
-                  >
-                    浏览…
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-zinc-400">创建后操作</label>
-              <select
-                value={wtOpenAfter}
-                onChange={(e) => setWtOpenAfter(e.target.value as "none" | "current" | "newWindow")}
-                className="w-full rounded border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-zinc-100 outline-none focus:border-sky-500"
-              >
-                <option value="current">在当前窗口切换到新工作树</option>
-                <option value="newWindow">在新窗口中打开新工作树</option>
-                <option value="none">仅创建，保持当前工作区不变</option>
-              </select>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* 移除工作树确认弹窗 */}
-      {confirmRemoveWt && activeRepoRoot && (
-        <Modal
-          title="移除 Git 工作树"
-          onClose={() => setConfirmRemoveWt(null)}
-          footer={
-            <>
-              <Button onClick={() => setConfirmRemoveWt(null)}>取消</Button>
-              <DangerButton
-                disabled={!!busyAction}
-                onClick={() => {
-                  const targetWt = confirmRemoveWt;
-                  setConfirmRemoveWt(null);
-                  void runAction("移除工作树", async () => {
-                    await gitApi.worktreeRemove(activeRepoRoot, targetWt.path, forceRemoveWt);
-                    setNotice("已移除工作树");
-                  });
-                }}
-              >
-                确认移除
-              </DangerButton>
-            </>
-          }
-        >
-          <div className="space-y-3 text-xs">
-            <p className="text-zinc-300">
-              确定要移除工作树目录{" "}
-              <span className="font-mono text-zinc-100 break-all">{confirmRemoveWt.path}</span> 吗？
-            </p>
-            <label className="flex items-center gap-2 text-zinc-400 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={forceRemoveWt}
-                onChange={(e) => setForceRemoveWt(e.target.checked)}
-                className="accent-sky-500"
-              />
-              <span>强制移除（包含未提交更改或目录缺失时勾选 --force）</span>
-            </label>
-          </div>
-        </Modal>
-      )}
-
-      {/* 放弃单个文件更改确认弹窗 */}
-      {confirmDiscard && activeRepoRoot && (
-        <Modal
-          title="放弃更改"
-          onClose={() => setConfirmDiscard(null)}
-          footer={
-            <>
-              <Button onClick={() => setConfirmDiscard(null)}>取消</Button>
-              <DangerButton
-                disabled={!!busyAction}
-                onClick={() => {
-                  const target = confirmDiscard;
-                  setConfirmDiscard(null);
-                  void runAction("放弃更改", async () => {
-                    await gitApi.discard(activeRepoRoot, target.path, target.status === "U");
-                    if (rootPath) void explorerStore.getState().refresh(rootPath);
-                  });
-                }}
-              >
-                确认放弃
-              </DangerButton>
-            </>
-          }
-        >
-          <p className="text-xs text-zinc-300">
-            {confirmDiscard.status === "U" ? "确定永久删除未跟踪文件 " : "确定还原对文件 "}
-            <span className="font-mono text-zinc-100 break-all">{confirmDiscard.path}</span>
-            {confirmDiscard.status === "U" ? " 吗？此操作不可恢复。" : " 的未暂存修改吗？"}
-          </p>
-        </Modal>
-      )}
-
-      {/* 放弃所有未暂存更改确认弹窗 */}
-      {confirmDiscardAll && activeRepoRoot && overview && (
-        <Modal
-          title="放弃所有更改"
-          onClose={() => setConfirmDiscardAll(false)}
-          footer={
-            <>
-              <Button onClick={() => setConfirmDiscardAll(false)}>取消</Button>
-              <DangerButton
-                disabled={!!busyAction}
-                onClick={() => {
-                  setConfirmDiscardAll(false);
-                  void runAction("放弃所有更改", async () => {
-                    await gitApi.discardAll(activeRepoRoot);
-                    if (rootPath) void explorerStore.getState().refresh(rootPath);
-                    setNotice("已放弃所有未暂存更改");
-                  });
-                }}
-              >
-                全部放弃
-              </DangerButton>
-            </>
-          }
-        >
-          <p className="text-xs text-zinc-300">
-            确定要还原工作区所有已修改文件并删除未跟踪文件（共{" "}
-            <span className="font-semibold text-amber-300">{overview.changes.length}</span>{" "}
-            项）吗？此操作不可恢复。
-          </p>
-        </Modal>
-      )}
-    </div>
-  );
-}
-
-function ChangeRow({
-  item,
-  onOpen,
-  actions,
-}: {
-  item: GitFileEntryDto;
-  onOpen: () => void;
-  actions: React.ReactNode;
-}) {
-  const { name, dir } = splitPathParts(item.path);
-  return (
-    <div
-      onClick={onOpen}
-      title={`${item.path}（点击查看文件对比）`}
-      className="group flex cursor-pointer items-center justify-between gap-2 px-3 py-1 text-xs hover:bg-zinc-800/70"
-    >
-      <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-        <span className="truncate text-zinc-200">{name}</span>
-        {dir && <span className="truncate text-[10px] text-zinc-500">{dir}</span>}
-      </div>
-      <div className="flex shrink-0 items-center gap-1">
-        <div className="hidden items-center gap-0.5 group-hover:flex">{actions}</div>
-        <span className={`w-3.5 text-center font-mono text-[11px] font-semibold ${statusColorClass(item.status)}`}>
-          {item.status}
-        </span>
-      </div>
+      <GitModals
+        rootPath={rootPath}
+        activeRepoRoot={activeRepoRoot}
+        overview={overview}
+        prunableCount={prunableCount}
+        busyAction={busyAction}
+        runAction={runAction}
+        onNotice={setNotice}
+        wtManagerOpen={wtManagerOpen}
+        onCloseWtManager={() => setWtManagerOpen(false)}
+        onOpenAddWorktree={handleOpenAddWorktree}
+        wtModalOpen={wtModalOpen}
+        onCloseWtModal={() => setWtModalOpen(false)}
+        wtCreateBranch={wtCreateBranch}
+        onChangeWtCreateBranch={setWtCreateBranch}
+        wtBranch={wtBranch}
+        onWorktreeBranchChange={handleWorktreeBranchChange}
+        wtBaseRef={wtBaseRef}
+        onChangeWtBaseRef={setWtBaseRef}
+        wtTargetPath={wtTargetPath}
+        onChangeWtTargetPath={(val) => {
+          setWtTargetEdited(true);
+          setWtTargetPath(val);
+        }}
+        wtOpenAfter={wtOpenAfter}
+        onChangeWtOpenAfter={setWtOpenAfter}
+        onPickWorktreeDir={() => void handlePickWorktreeDir()}
+        onCreateWorktree={() => void handleCreateWorktree()}
+        confirmRemoveWt={confirmRemoveWt}
+        onOpenRemoveWt={(wt) => {
+          setForceRemoveWt(wt.isPrunable);
+          setConfirmRemoveWt(wt);
+        }}
+        onCloseRemoveWt={() => setConfirmRemoveWt(null)}
+        forceRemoveWt={forceRemoveWt}
+        onChangeForceRemoveWt={setForceRemoveWt}
+        confirmDiscard={confirmDiscard}
+        onCloseDiscard={() => setConfirmDiscard(null)}
+        confirmDiscardAll={confirmDiscardAll}
+        onCloseDiscardAll={() => setConfirmDiscardAll(false)}
+      />
     </div>
   );
 }

@@ -31,11 +31,13 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
   const keyPassRef = useRef<HTMLInputElement>(null);
   const authRef = useRef<AuthMethod>(existing?.authMethod ?? "password");
   const [authMethod, setAuthMethod] = useState<AuthMethod>(existing?.authMethod ?? "password");
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   const initialHost = existing?.host ?? prefill?.host ?? "";
   const initialPort = existing?.port ?? prefill?.port ?? 22;
 
   function submit() {
+    setValidationError(null);
     const rawName = nameRef.current?.value.trim() ?? "";
     const host = hostRef.current?.value.trim() ?? "";
     const name = rawName || host; // 选填项，不填则直接显示 IP
@@ -46,15 +48,15 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
     const keyPass = keyPassRef.current?.value ?? "";
 
     if (!host || !username) {
-      alert("主机与用户名不能为空");
+      setValidationError("主机与用户名不能为空");
       return;
     }
     if (authMethod === "password" && !existing && !password) {
-      alert("密码认证需要提供密码");
+      setValidationError("密码认证需要提供密码");
       return;
     }
     if (authMethod === "public_key" && !keyPath && !existing?.keyPath) {
-      alert("公钥认证需要提供私钥文件路径");
+      setValidationError("公钥认证需要提供私钥文件路径");
       return;
     }
     onSubmit({
@@ -89,6 +91,14 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
       width={440}
     >
       <div className="space-y-3">
+        {validationError && (
+          <div
+            role="alert"
+            className="rounded border border-[var(--glance-danger-border)] bg-[var(--glance-danger-bg)] px-2.5 py-1.5 text-xs text-[var(--glance-danger-text)]"
+          >
+            {validationError}
+          </div>
+        )}
         <div>
           <label className={labelClass}>配置名称（选填，留空则默认显示主机 IP）</label>
           <input

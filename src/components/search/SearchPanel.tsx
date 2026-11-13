@@ -68,7 +68,13 @@ export function SearchPanel() {
     return (
       <>
         {lineText.slice(0, matchStart)}
-        <mark className="rounded-sm bg-amber-500/30 text-amber-200">
+        <mark
+          style={{
+            background: "var(--glance-highlight-bg)",
+            color: "var(--glance-highlight-text)",
+          }}
+          className="rounded-sm px-0.5"
+        >
           {lineText.slice(matchStart, matchStart + matchLen)}
         </mark>
         {lineText.slice(matchStart + matchLen)}

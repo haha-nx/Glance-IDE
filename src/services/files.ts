@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { invokeIpc } from "../lib/ipc";
 import type {
   AppInfoDto,
   FileContentDto,
@@ -93,7 +94,7 @@ export const filesApi = {
 
 export const appApi = {
   async getInfo(): Promise<AppInfoDto> {
-    return invoke<AppInfoDto>("get_app_info");
+    return invokeIpc<AppInfoDto>("get_app_info");
   },
 
   async exitApp(): Promise<void> {
@@ -172,7 +173,7 @@ export const transferApi = {
     items: string[],
     targetDirUri: string,
   ): Promise<TransferConflictDto[]> {
-    return invoke<TransferConflictDto[]>("check_transfer_conflicts", {
+    return invokeIpc<TransferConflictDto[]>("check_transfer_conflicts", {
       items,
       targetDirUri,
     });
@@ -187,7 +188,7 @@ export const transferApi = {
   ): Promise<TransferResultDto> {
     const channel = new Channel<TransferProgressDto>();
     channel.onmessage = onProgress;
-    return invoke<TransferResultDto>("upload_to_workspace", {
+    return invokeIpc<TransferResultDto>("upload_to_workspace", {
       taskId,
       sourceLocalPaths,
       targetDirUri,
@@ -206,7 +207,7 @@ export const transferApi = {
   ): Promise<TransferResultDto> {
     const channel = new Channel<TransferProgressDto>();
     channel.onmessage = onProgress;
-    return invoke<TransferResultDto>("download_from_workspace", {
+    return invokeIpc<TransferResultDto>("download_from_workspace", {
       taskId,
       sourceUris,
       destDirPath,
@@ -217,10 +218,10 @@ export const transferApi = {
   },
 
   async cancel(taskId: string): Promise<boolean> {
-    return invoke<boolean>("cancel_transfer", { taskId });
+    return invokeIpc<boolean>("cancel_transfer", { taskId });
   },
 
   async revealLocalPath(path: string): Promise<void> {
-    return invoke("reveal_local_path", { path });
+    return invokeIpc("reveal_local_path", { path });
   },
 };

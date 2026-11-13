@@ -1,4 +1,5 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
+import { invokeIpc } from "../lib/ipc";
 
 export type InstallMode = "in_place_app" | "silent_installer" | "manual";
 
@@ -34,7 +35,7 @@ export interface UpdateDownloadProgressDto {
 
 export const updaterApi = {
   async checkGithubUpdate(): Promise<UpdateCheckResultDto> {
-    return invoke<UpdateCheckResultDto>("check_github_update");
+    return invokeIpc<UpdateCheckResultDto>("check_github_update");
   },
 
   async downloadInstaller(
@@ -48,7 +49,7 @@ export const updaterApi = {
     if (onProgress) {
       channel.onmessage = onProgress;
     }
-    return invoke<DownloadInstallerResultDto>("download_update_installer", {
+    return invokeIpc<DownloadInstallerResultDto>("download_update_installer", {
       url,
       fileName,
       expectedSize: expectedSize ?? null,
@@ -58,18 +59,18 @@ export const updaterApi = {
   },
 
   async cancelDownload(): Promise<boolean> {
-    return invoke<boolean>("cancel_update_download");
+    return invokeIpc<boolean>("cancel_update_download");
   },
 
   async applyUpdateAndRestart(path: string): Promise<boolean> {
-    return invoke<boolean>("apply_update_and_restart", { path });
+    return invokeIpc<boolean>("apply_update_and_restart", { path });
   },
 
   async openDownloadedInstaller(path: string, revealOnly = false): Promise<void> {
-    return invoke("open_downloaded_installer", { path, revealOnly });
+    return invokeIpc("open_downloaded_installer", { path, revealOnly });
   },
 
   async openExternalUrl(url: string): Promise<void> {
-    return invoke("open_external_url", { url });
+    return invokeIpc("open_external_url", { url });
   },
 };

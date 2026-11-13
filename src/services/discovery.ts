@@ -1,4 +1,5 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
+import { invokeIpc } from "../lib/ipc";
 
 export interface InterfaceInfo {
   name: string;
@@ -19,11 +20,11 @@ export interface DiscoveryCandidate {
 
 export const discoveryApi = {
   async interfaces(): Promise<InterfaceInfo[]> {
-    return invoke<InterfaceInfo[]>("discovery_interfaces");
+    return invokeIpc<InterfaceInfo[]>("discovery_interfaces");
   },
 
   async defaultRoute(): Promise<string | null> {
-    const info = await invoke<{ localIp: string | null }>("discovery_default_route");
+    const info = await invokeIpc<{ localIp: string | null }>("discovery_default_route");
     return info.localIp;
   },
 
@@ -33,19 +34,19 @@ export const discoveryApi = {
     onResult: (c: DiscoveryCandidate) => void,
   ): Promise<number> {
     const channel = new Channel<DiscoveryCandidate>(onResult);
-    return invoke<number>("discovery_scan", { cidr, ports, onResult: channel });
+    return invokeIpc<number>("discovery_scan", { cidr, ports, onResult: channel });
   },
 
   async cancel(): Promise<void> {
-    await invoke("discovery_cancel");
+    await invokeIpc("discovery_cancel");
   },
 
   async mdnsStart(onResult: (c: DiscoveryCandidate) => void): Promise<void> {
     const channel = new Channel<DiscoveryCandidate>(onResult);
-    await invoke("discovery_mdns_start", { onResult: channel });
+    await invokeIpc("discovery_mdns_start", { onResult: channel });
   },
 
   async mdnsCancel(): Promise<void> {
-    await invoke("discovery_mdns_cancel");
+    await invokeIpc("discovery_mdns_cancel");
   },
 };

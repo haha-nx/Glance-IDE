@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, Suspense, lazy, useEffect, useState, type ReactNode } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open as pickDialog } from "@tauri-apps/plugin-dialog";
 import { tabsStore } from "../../stores/tabs";
@@ -7,9 +7,14 @@ import { explorerStore } from "../../stores/explorer";
 import { getModel } from "../../lib/models";
 import { TabBar } from "./TabBar";
 import { MonacoHost } from "./MonacoHost";
-import { GitDiffView } from "./GitDiffView";
-import { MarkdownWysiwyg } from "../markdown/MarkdownWysiwyg";
 import { IS_MAC } from "../../lib/platform";
+
+const GitDiffView = lazy(() =>
+  import("./GitDiffView").then((m) => ({ default: m.GitDiffView })),
+);
+const MarkdownWysiwyg = lazy(() =>
+  import("../markdown/MarkdownWysiwyg").then((m) => ({ default: m.MarkdownWysiwyg })),
+);
 
 /**
  * 编辑器区（VS Code 风格多分组分屏）：
@@ -192,9 +197,17 @@ function EditorGroupView({ groupId }: { groupId: string }) {
         </div>
       );
   } else if (active.diff) {
-    content = <GitDiffView key={active.uri} uri={active.uri} diff={active.diff} />;
+    content = (
+      <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-zinc-500">正在加载对比视图...</div>}>
+        <GitDiffView key={active.uri} uri={active.uri} diff={active.diff} />
+      </Suspense>
+    );
   } else if (isMarkdown && mdMode === "preview") {
-    content = <MarkdownWysiwyg key={active.uri} uri={active.uri} headerRight={modeSwitch} />;
+    content = (
+      <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-zinc-500">正在加载 Markdown 视图...</div>}>
+        <MarkdownWysiwyg key={active.uri} uri={active.uri} headerRight={modeSwitch} />
+      </Suspense>
+    );
   } else if (isMarkdown) {
     content = (
       <>
