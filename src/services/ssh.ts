@@ -119,6 +119,14 @@ export const sshApi = {
     }
   },
 
+  async setWindowRemoteDevice(deviceIdentityId: string | null): Promise<void> {
+    try {
+      await invoke("set_window_remote_device", { deviceIdentityId });
+    } catch {
+      /* 窗口关闭期间忽略 */
+    }
+  },
+
   async lspDetect(
     sessionId: string,
   ): Promise<

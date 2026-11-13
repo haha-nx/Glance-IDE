@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open as pickDialog } from "@tauri-apps/plugin-dialog";
 import { appApi, filesApi } from "../../services/files";
 import { updaterApi } from "../../services/updater";
@@ -97,57 +97,67 @@ export function TitleBar({
 
   useEffect(() => {
     if (!IS_MAC) return;
+    let disposed = false;
     let unlisten: (() => void) | null = null;
-    void listen<string>("menu:command", (event) => {
-      switch (event.payload) {
-        case "new_file":
-          newFile();
-          break;
-        case "new_folder":
-          newFolder();
-          break;
-        case "new_window":
-          newWindow();
-          break;
-        case "save":
-          saveCurrent();
-          break;
-        case "save_all":
-          saveAll();
-          break;
-        case "new_terminal":
-          newTerminalRef.current?.();
-          break;
-        case "toggle_terminal":
-          toggleTerminalRef.current?.();
-          break;
-        case "panel_explorer":
-        case "panel_search":
-        case "panel_git":
-        case "panel_remote":
-        case "panel_discovery": {
-          const panel = event.payload.replace("panel_", "");
-          window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: panel }));
-          break;
-        }
-        case "github_repo":
-          void updaterApi.openExternalUrl("https://github.com/haha-nx/Glance-IDE");
-          break;
-        case "quit":
-          // 复用未保存确认流程：有脏文件时由 App 弹出确认，否则直接退出
-          if (tabsStore.getState().hasDirty()) {
-            window.dispatchEvent(new CustomEvent("glance:request-close"));
-          } else {
-            void appApi.exitApp();
+    void getCurrentWebviewWindow()
+      .listen<string>("menu:command", (event) => {
+        switch (event.payload) {
+          case "new_file":
+            newFile();
+            break;
+          case "new_folder":
+            newFolder();
+            break;
+          case "new_window":
+            newWindow();
+            break;
+          case "save":
+            saveCurrent();
+            break;
+          case "save_all":
+            saveAll();
+            break;
+          case "new_terminal":
+            newTerminalRef.current?.();
+            break;
+          case "toggle_terminal":
+            toggleTerminalRef.current?.();
+            break;
+          case "panel_explorer":
+          case "panel_search":
+          case "panel_git":
+          case "panel_remote":
+          case "panel_discovery": {
+            const panel = event.payload.replace("panel_", "");
+            window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: panel }));
+            break;
           }
-          break;
-        default:
-          break;
-      }
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+          case "github_repo":
+            void updaterApi.openExternalUrl("https://github.com/haha-nx/Glance-IDE");
+            break;
+          case "quit":
+            // 复用未保存确认流程：有脏文件时由 App 弹出确认，否则直接退出
+            if (tabsStore.getState().hasDirty()) {
+              window.dispatchEvent(new CustomEvent("glance:request-close"));
+            } else {
+              void appApi.exitApp();
+            }
+            break;
+          default:
+            break;
+        }
+      })
+      .then((fn) => {
+        if (disposed) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   // 窗口控制逻辑
@@ -418,7 +428,7 @@ export function TitleBar({
   if (activeTab) {
     title = `${activeTab.name} — Glance IDE`;
   } else if (rootPath) {
-    const rootName = rootPath.split("/").filter(Boolean).pop() || rootPath;
+    const rootName = rootPath.split(/[/\\]/).filter(Boolean).pop() || rootPath;
     title = `${rootName} — Glance IDE`;
   }
 

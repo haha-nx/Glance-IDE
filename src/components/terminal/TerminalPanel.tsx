@@ -129,8 +129,21 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
   const outputRef = useRef<HTMLDivElement>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const termsMapRef = useRef<Map<string, TermTabItem>>(new Map());
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fontSize = settingsStore((s) => s.fontSize);
   const theme = settingsStore((s) => s.theme);
+
+  // 终端执行命令后静默刷新资源管理器（本地 / WSL / 远端 SSH 统一适用）
+  const scheduleExplorerSync = useCallback((delayMs: number) => {
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(() => {
+      syncTimerRef.current = null;
+      const root = explorerStore.getState().rootPath;
+      if (root) {
+        void explorerStore.getState().refresh(root, { silent: true });
+      }
+    }, delayMs);
+  }, []);
 
   // 刷新会话与 WSL 发行版（macOS 不提供 WSL）
   useEffect(() => {
@@ -140,6 +153,10 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
     }
 
     return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
       for (const item of termsMapRef.current.values()) {
         void terminalApi.close(item.channelId).catch(() => {});
         item.term.dispose();
@@ -174,15 +191,28 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
       term.open(div);
 
       const id = `term-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      let pendingSyncUntil = 0;
       const info = await openFn((e) => {
         if (e.type === "data" || e.type === "stdout" || e.type === "stderr") {
           term.write(base64ToBytes(e.bytes));
+          if (Date.now() < pendingSyncUntil) {
+            scheduleExplorerSync(450);
+          }
         } else if (e.type === "closed") {
           term.writeln("\r\n[终端进程已结束]");
+          pendingSyncUntil = 0;
+          scheduleExplorerSync(300);
         }
       });
 
-      term.onData((data) => void terminalApi.write(info.channelId, data));
+      term.onData((data) => {
+        void terminalApi.write(info.channelId, data);
+        // 仅在提交命令（回车/换行）后计划刷新，避免普通按键期间频繁请求远端 SFTP
+        if (data.includes("\r") || data.includes("\n")) {
+          pendingSyncUntil = Date.now() + 5000;
+          scheduleExplorerSync(700);
+        }
+      });
 
       const item: TermTabItem = {
         id,
@@ -233,7 +263,7 @@ export function TerminalPanel({ onClose, isMaximized, onToggleMaximize }: Termin
         void terminalApi.resize(info.channelId, term.cols, term.rows);
       });
     },
-    [],
+    [scheduleExplorerSync],
   );
 
   // 打开本机终端

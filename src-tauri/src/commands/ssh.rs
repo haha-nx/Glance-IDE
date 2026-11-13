@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::app_services::connection_profiles::{self, ConnectionProfileDto, DeviceIdentityDto, ProfileFields};
@@ -293,6 +293,52 @@ pub async fn unbind_identity(
 
 // ---------- 连接编排 ----------
 
+/// 从多个打开窗口中选择唯一负责弹窗提示 SSH 断线的窗口标签（纯函数便于单测）。
+/// 优先选择正在使用该设备远程工作区的窗口（当前聚焦 → 最近聚焦 → "main" → 字典序首个）；
+/// 若无远程工作区命中（例如仅打开了 SSH 终端），则兜底选择发起连接且尚未切到其他设备的窗口。
+fn select_prompt_window_label<'a>(
+    device_identity_id: Uuid,
+    open_windows: &[(&'a str, bool)],
+    window_devices: &HashMap<String, Option<Uuid>>,
+    last_focused: Option<&str>,
+    initiator_label: Option<&str>,
+) -> Option<String> {
+    let matching: Vec<(&str, bool)> = open_windows
+        .iter()
+        .copied()
+        .filter(|(label, _)| window_devices.get(*label).copied().flatten() == Some(device_identity_id))
+        .collect();
+
+    if !matching.is_empty() {
+        if let Some((label, _)) = matching.iter().find(|(_, focused)| *focused) {
+            return Some((*label).to_string());
+        }
+        if let Some(last) = last_focused {
+            if matching.iter().any(|(label, _)| *label == last) {
+                return Some(last.to_string());
+            }
+        }
+        if matching.iter().any(|(label, _)| *label == "main") {
+            return Some("main".to_string());
+        }
+        let mut sorted: Vec<&str> = matching.into_iter().map(|(l, _)| l).collect();
+        sorted.sort_unstable();
+        return sorted.into_iter().next().map(str::to_string);
+    }
+
+    if let Some(initiator) = initiator_label {
+        if open_windows.iter().any(|(label, _)| *label == initiator) {
+            // 若发起窗口后来切到了另一台远程设备，则不再在它上面弹出本设备的断线提示
+            let bound = window_devices.get(initiator).copied().flatten();
+            if bound.is_none() || bound == Some(device_identity_id) {
+                return Some(initiator.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 /// 会话健康监控：设备关机 / 网络中断会让 russh handle 变为 closed。
 /// 每 2 秒探测一次，意外掉线时回收会话并向前端推送 `ssh:session-lost`。
 ///
@@ -306,15 +352,17 @@ fn spawn_session_watchdog(
     device_name: Option<String>,
     endpoint: String,
 ) {
-    use tauri::{Emitter, Manager};
-
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
             let entry = {
                 let state = app.state::<AppState>();
-                state.sessions.get(&session_id)
+                let found = state.sessions.get(&session_id);
+                if found.is_none() {
+                    state.session_windows.lock().unwrap().remove(&session_id);
+                }
+                found
             };
             let Some(entry) = entry else {
                 // 会话已被主动移除（用户断开 / 重连替换 / 应用退出）
@@ -325,10 +373,29 @@ fn spawn_session_watchdog(
                 continue;
             }
 
-            {
+            let prompt_window_label = {
                 let state = app.state::<AppState>();
                 state.sessions.disconnect(&session_id).await;
-            }
+                let initiator_label = state.session_windows.lock().unwrap().remove(&session_id);
+                let window_devices = state.window_devices.lock().unwrap().clone();
+                let last_focused = state.last_focused_window.lock().unwrap().clone();
+                let webview_windows = app.webview_windows();
+                let open_windows: Vec<(String, bool)> = webview_windows
+                    .iter()
+                    .map(|(label, win)| (label.clone(), win.is_focused().unwrap_or(false)))
+                    .collect();
+                let open_refs: Vec<(&str, bool)> = open_windows
+                    .iter()
+                    .map(|(l, f)| (l.as_str(), *f))
+                    .collect();
+                select_prompt_window_label(
+                    device_identity_id,
+                    &open_refs,
+                    &window_devices,
+                    last_focused.as_deref(),
+                    initiator_label.as_deref(),
+                )
+            };
 
             let _ = app.emit(
                 "ssh:session-lost",
@@ -338,6 +405,7 @@ fn spawn_session_watchdog(
                     "deviceIdentityId": device_identity_id,
                     "deviceName": device_name,
                     "endpoint": endpoint,
+                    "promptWindowLabel": prompt_window_label,
                 }),
             );
             break;
@@ -348,6 +416,7 @@ fn spawn_session_watchdog(
 #[tauri::command]
 pub async fn connect_profile(
     app: tauri::AppHandle,
+    window: tauri::Window,
     state: State<'_, AppState>,
     profile_id: String,
 ) -> Result<ConnectOutcomeDto, CmdError> {
@@ -373,6 +442,7 @@ pub async fn connect_profile(
             // 避免「再次连接」只增不减、文件操作路由到死会话
             state.sessions.disconnect_profile_sessions(&pid).await;
             let session_id = Uuid::new_v4();
+            let window_label = window.label().to_string();
             state.sessions.insert(
                 session_id,
                 pid,
@@ -382,6 +452,11 @@ pub async fn connect_profile(
                 chrono::Utc::now().timestamp_millis(),
                 handle,
             );
+            state
+                .session_windows
+                .lock()
+                .unwrap()
+                .insert(session_id, window_label.clone());
             // 启动掉线监控（设备关机/网络中断时通知前端弹窗）
             spawn_session_watchdog(
                 app.clone(),
@@ -390,6 +465,15 @@ pub async fn connect_profile(
                 device_identity_id,
                 device_name.clone(),
                 endpoint,
+            );
+            let _ = app.emit(
+                "ssh:session-connected",
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "profileId": pid,
+                    "deviceIdentityId": device_identity_id,
+                    "initiatorWindowLabel": window_label,
+                }),
             );
             ConnectOutcomeDto::Connected { session_id, device_identity_id, device_name }
         }
@@ -490,12 +574,32 @@ pub async fn list_sessions(state: State<'_, AppState>) -> Result<Vec<SessionDto>
         .collect())
 }
 
+/// 记录当前窗口关联的远程设备身份 UUID（本地/空白工作区传 None），用于 SSH 断线弹窗只路由到相关窗口。
+#[tauri::command]
+pub fn set_window_remote_device(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    device_identity_id: Option<String>,
+) -> Result<(), CmdError> {
+    let parsed = match device_identity_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(raw) => Some(parse_uuid(raw, "device_identity_id")?),
+        None => None,
+    };
+    state
+        .window_devices
+        .lock()
+        .unwrap()
+        .insert(window.label().to_string(), parsed);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn disconnect_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<bool, CmdError> {
     let sid = parse_uuid(&session_id, "session_id")?;
+    state.session_windows.lock().unwrap().remove(&sid);
     // 先回收本会话的 LSP 通道（生命周期：随会话关闭）
     crate::app_services::lsp::close_by_session(&state.lsp, &sid).await;
     Ok(state.sessions.disconnect(&sid).await)
@@ -536,5 +640,48 @@ mod tests {
         let v2: serde_json::Value = serde_json::to_value(&out2).unwrap();
         assert!(v2.get("sessionId").is_some(), "Connected 字段应为 camelCase: {v2}");
         assert!(v2.get("deviceIdentityId").is_some());
+    }
+
+    #[test]
+    fn prompt_window_prefers_active_remote_window_and_skips_unrelated_windows() {
+        let dev_a = Uuid::new_v4();
+        let dev_b = Uuid::new_v4();
+        let open = [("main", false), ("win-2", true), ("win-3", false)];
+
+        // win-2 打开了 dev_a 且聚焦；main 为本地；win-3 打开了 dev_b
+        let mut devs = HashMap::new();
+        devs.insert("main".into(), None);
+        devs.insert("win-2".into(), Some(dev_a));
+        devs.insert("win-3".into(), Some(dev_b));
+
+        assert_eq!(
+            select_prompt_window_label(dev_a, &open, &devs, Some("win-2"), Some("main")).as_deref(),
+            Some("win-2")
+        );
+
+        // 两个窗口都在同一台 dev_a 时，只选聚焦（或最近聚焦）的那一个
+        devs.insert("win-3".into(), Some(dev_a));
+        assert_eq!(
+            select_prompt_window_label(dev_a, &[("main", false), ("win-2", false), ("win-3", false)], &devs, Some("win-3"), Some("main")).as_deref(),
+            Some("win-3")
+        );
+
+        // 无远程工作区使用 dev_a 时，仅当发起窗口仍在且未切到其他设备才兜底
+        let mut local_devs = HashMap::new();
+        local_devs.insert("main".into(), None);
+        local_devs.insert("win-2".into(), Some(dev_b));
+        assert_eq!(
+            select_prompt_window_label(dev_a, &[("main", false), ("win-2", true)], &local_devs, Some("win-2"), Some("main")).as_deref(),
+            Some("main")
+        );
+        // 若发起窗口已切到 dev_b 或已关闭，不向无关窗口弹窗
+        assert_eq!(
+            select_prompt_window_label(dev_a, &[("main", false), ("win-2", true)], &local_devs, Some("win-2"), Some("win-2")),
+            None
+        );
+        assert_eq!(
+            select_prompt_window_label(dev_a, &[("win-2", true)], &local_devs, Some("win-2"), Some("main")),
+            None
+        );
     }
 }

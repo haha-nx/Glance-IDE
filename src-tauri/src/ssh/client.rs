@@ -113,6 +113,10 @@ pub async fn connect_and_auth(params: ConnectParams) -> ConnectStep {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(30)),
         keepalive_max: 3,
+        // 禁用 Nagle 避免 SFTP 小包/ACK 交互卡顿；扩大通道接收窗口与缓冲以提升局域网吞吐
+        nodelay: true,
+        window_size: 8 * 1024 * 1024,
+        channel_buffer_size: 256,
         ..Default::default()
     });
 

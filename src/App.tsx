@@ -148,7 +148,7 @@ function useWorkspacePersistence({
             if (targetProfile) {
               const outcome = await sshApi.connectProfile(targetProfile.id);
               if (outcome.status === "connected") {
-                explorerStore.getState().invalidateRemote();
+                explorerStore.getState().invalidateRemote(outcome.deviceIdentityId);
                 window.dispatchEvent(
                   new CustomEvent("glance:session-connected", {
                     detail: { deviceIdentityId: outcome.deviceIdentityId, sessionId: outcome.sessionId },
@@ -322,29 +322,65 @@ export function App() {
   useCloseGuard(() => setPendingWindowClose(true));
   useGlobalSave();
 
-  // SSH 会话意外掉线（设备关机 / 断网）：弹窗让用户选择重连或断开
+  // SSH 会话意外掉线 / 跨窗口重连同步：
+  // - 所有受影响窗口都清理自身远程目录缓存、SSH 终端与远端 LSP
+  // - 仅 promptWindowLabel 匹配的窗口弹出掉线确认模态框，避免多开窗口（或本地窗口）重复弹窗
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    const myLabel = getCurrentWindow().label;
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    const bind = (fn: () => void) => {
+      if (disposed) fn();
+      else unlisteners.push(fn);
+    };
+
     void listen<{
       sessionId: string;
       profileId: string;
       deviceIdentityId: string;
       deviceName: string | null;
       endpoint: string;
+      promptWindowLabel?: string | null;
     }>("ssh:session-lost", (event) => {
-      setSshLost(event.payload);
-      // 同步清掉远程目录缓存，避免继续展示已失效的目录
-      explorerStore.getState().invalidateRemote();
+      const payload = event.payload;
+      // 仅清掉该断线设备的远程目录缓存，避免影响另一台设备窗口
+      explorerStore.getState().invalidateRemote(payload.deviceIdentityId);
       // 通知终端面板回收该会话的 SSH 终端标签、远程 LSP 复位
       window.dispatchEvent(
         new CustomEvent("glance:session-disconnected", {
-          detail: { deviceIdentityId: event.payload.deviceIdentityId },
+          detail: { deviceIdentityId: payload.deviceIdentityId },
         }),
       );
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
+      if (payload.promptWindowLabel === myLabel) {
+        setSshLost(payload);
+      }
+    }).then(bind);
+
+    void listen<{
+      sessionId: string;
+      profileId: string;
+      deviceIdentityId: string;
+      initiatorWindowLabel: string;
+    }>("ssh:session-connected", (event) => {
+      const payload = event.payload;
+      setSshLost((cur) => (cur?.deviceIdentityId === payload.deviceIdentityId ? null : cur));
+      if (payload.initiatorWindowLabel !== myLabel) {
+        const root = explorerStore.getState().rootPath;
+        if (root && root.startsWith(`remote://${payload.deviceIdentityId}`)) {
+          void explorerStore.getState().refresh(root, { silent: true });
+        }
+        window.dispatchEvent(
+          new CustomEvent("glance:session-connected", {
+            detail: { deviceIdentityId: payload.deviceIdentityId, sessionId: payload.sessionId },
+          }),
+        );
+      }
+    }).then(bind);
+
+    return () => {
+      disposed = true;
+      unlisteners.forEach((fn) => fn());
+    };
   }, []);
 
   // 初始化设置，并在「自动检测更新」明确开启时后台检测 GitHub 版本更新（默认关闭时不主动检查或推送）
@@ -395,7 +431,13 @@ export function App() {
 
   const workspaceRootPath = explorerStore((s) => s.rootPath);
 
-  // 后台同步源代码管理状态，保持活动栏角标实时准确；保存文件或窗口恢复焦点时静默刷新
+  // 向 Rust 侧汇报本窗口当前绑定的远程设备身份，确保掉线弹窗只发往真正相关的窗口
+  useEffect(() => {
+    const match = workspaceRootPath?.match(/^remote:\/\/([^/]+)/);
+    void sshApi.setWindowRemoteDevice(match ? match[1] : null);
+  }, [workspaceRootPath]);
+
+  // 后台同步源代码管理状态与资源管理器文件树，保持角标与侧栏及时响应外部/终端修改
   useEffect(() => {
     if (!workspaceRootPath) {
       gitStore.getState().clear();
@@ -404,12 +446,13 @@ export function App() {
     void gitStore.getState().refresh(workspaceRootPath, true);
 
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let lastExplorerFocusSync = 0;
     const prevDirty = new Map<string, boolean>();
     for (const t of tabsStore.getState().tabs) {
       prevDirty.set(t.uri, t.dirty);
     }
 
-    const scheduleRefresh = () => {
+    const scheduleGitRefresh = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         void gitStore.getState().refresh(workspaceRootPath, true);
@@ -427,10 +470,17 @@ export function App() {
       }
       prevDirty.clear();
       for (const [k, v] of next) prevDirty.set(k, v);
-      if (savedTransition) scheduleRefresh();
+      if (savedTransition) scheduleGitRefresh();
     });
 
-    const onFocus = () => scheduleRefresh();
+    const onFocus = () => {
+      scheduleGitRefresh();
+      const now = Date.now();
+      if (now - lastExplorerFocusSync >= 1500) {
+        lastExplorerFocusSync = now;
+        void explorerStore.getState().refresh(workspaceRootPath, { silent: true });
+      }
+    };
     window.addEventListener("focus", onFocus);
 
     return () => {

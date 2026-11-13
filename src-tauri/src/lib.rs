@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use tauri::Manager;
 #[cfg(target_os = "macos")]
-use tauri::Emitter;
+use tauri::{Emitter, EventTarget};
+use uuid::Uuid;
 
 use commands::ssh::PendingKeyMap;
 use filesystem::FileSystemProvider;
@@ -34,6 +35,12 @@ pub struct AppState {
     /// 等待用户确认的握手观测密钥（fingerprint → 观测记录），
     /// 在 approve_identity 时消费用于持久化公钥 blob
     pub pending_keys: StdMutex<PendingKeyMap>,
+    /// 各窗口当前关联的远程设备身份 UUID（window_label → device_identity_id）
+    pub window_devices: StdMutex<HashMap<String, Option<Uuid>>>,
+    /// 发起 SSH 连接的窗口标签（session_id → window_label），当无远程工作区窗口时作为掉线提示兜底
+    pub session_windows: StdMutex<HashMap<Uuid, String>>,
+    /// 最近获得焦点的窗口标签（用于 macOS 原生菜单与多窗口掉线提示路由）
+    pub last_focused_window: StdMutex<Option<String>>,
 }
 
 impl AppState {
@@ -47,8 +54,33 @@ impl AppState {
             lsp: Default::default(),
             transfers: Default::default(),
             pending_keys: StdMutex::new(HashMap::new()),
+            window_devices: StdMutex::new(HashMap::new()),
+            session_windows: StdMutex::new(HashMap::new()),
+            last_focused_window: StdMutex::new(None),
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_menu_target_window(app: &tauri::AppHandle) -> Option<String> {
+    if let Some(win) = app
+        .webview_windows()
+        .values()
+        .find(|w| w.is_focused().unwrap_or(false))
+    {
+        return Some(win.label().to_string());
+    }
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Some(last) = state.last_focused_window.lock().unwrap().clone() {
+            if app.get_webview_window(&last).is_some() {
+                return Some(last);
+            }
+        }
+    }
+    if app.get_webview_window("main").is_some() {
+        return Some("main".to_string());
+    }
+    app.webview_windows().keys().next().cloned()
 }
 
 /// 在退出或更新重启前清理活跃传输、终端、LSP 与 SSH 会话。
@@ -283,20 +315,26 @@ pub fn run() {
                 )?;
                 let _ = app.set_menu(menu);
 
-                app.on_menu_event(|app, event| match event.id().as_ref() {
-                    // 保持既有事件名，编辑器区已监听
-                    "open_folder" => {
-                        let _ = app.emit("menu:open-folder", ());
-                    }
-                    "open_file" => {
-                        let _ = app.emit("menu:open-file", ());
-                    }
-                    "settings" => {
-                        let _ = app.emit("menu:settings", ());
-                    }
-                    // 其余菜单项统一走 menu:command，由标题栏分发到既有动作
-                    id => {
-                        let _ = app.emit("menu:command", id);
+                app.on_menu_event(|app, event| {
+                    let Some(target_label) = resolve_menu_target_window(app) else {
+                        return;
+                    };
+                    let target = EventTarget::webview_window(target_label);
+                    match event.id().as_ref() {
+                        // 保持既有事件名，编辑器区按当前窗口监听
+                        "open_folder" => {
+                            let _ = app.emit_to(target, "menu:open-folder", ());
+                        }
+                        "open_file" => {
+                            let _ = app.emit_to(target, "menu:open-file", ());
+                        }
+                        "settings" => {
+                            let _ = app.emit_to(target, "menu:settings", ());
+                        }
+                        // 其余菜单项统一走 menu:command，仅派发给当前焦点窗口
+                        id => {
+                            let _ = app.emit_to(target, "menu:command", id);
+                        }
                     }
                 });
             }
@@ -339,6 +377,7 @@ pub fn run() {
             commands::ssh::list_sessions,
             commands::ssh::disconnect_session,
             commands::ssh::remote_home,
+            commands::ssh::set_window_remote_device,
             // WSL 功能
             commands::wsl::wsl_is_available,
             commands::wsl::wsl_list_distros,
@@ -389,14 +428,29 @@ pub fn run() {
             commands::git::git_worktree_prune,
         ])
         .on_window_event(|window, event| {
-            // 主窗口关闭时回收全部 SSH 会话（生命周期管理）
-            if let tauri::WindowEvent::Destroyed = event {
-                if window.label() == "main" {
-                    let state: Option<tauri::State<AppState>> = window.try_state();
-                    if let Some(state) = state {
-                        shutdown_runtime_sessions(&state);
+            let label = window.label().to_string();
+            match event {
+                tauri::WindowEvent::Focused(true) => {
+                    if let Some(state) = window.try_state::<AppState>() {
+                        *state.last_focused_window.lock().unwrap() = Some(label);
                     }
                 }
+                tauri::WindowEvent::Destroyed => {
+                    if let Some(state) = window.try_state::<AppState>() {
+                        state.window_devices.lock().unwrap().remove(&label);
+                        {
+                            let mut last = state.last_focused_window.lock().unwrap();
+                            if last.as_deref() == Some(label.as_str()) {
+                                *last = None;
+                            }
+                        }
+                        // 主窗口关闭时回收全部 SSH 会话（生命周期管理）
+                        if label == "main" {
+                            shutdown_runtime_sessions(&state);
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

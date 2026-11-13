@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState, type ReactNode } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open as pickDialog } from "@tauri-apps/plugin-dialog";
 import { tabsStore } from "../../stores/tabs";
 import { tabDragStore, type DropZone } from "../../stores/tabDrag";
@@ -24,26 +24,44 @@ export function EditorArea() {
   const [weights, setWeights] = useState<Record<string, number>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // 原生菜单事件
+  // 原生菜单事件：按当前窗口绑定，避免多开窗口互相触发
   useEffect(() => {
+    let disposed = false;
     const unlisteners: Array<() => void> = [];
-    void listen("menu:open-folder", async () => {
-      const picked = await pickDialog({ directory: true, multiple: false });
-      if (typeof picked === "string" && picked) {
-        await explorerStore.getState().openRoot(picked);
-        window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: "explorer" }));
+    const curWin = getCurrentWebviewWindow();
+    const bind = (un: () => void) => {
+      if (disposed) {
+        un();
+      } else {
+        unlisteners.push(un);
       }
-    }).then((un) => unlisteners.push(un));
-    void listen("menu:open-file", async () => {
-      const picked = await pickDialog({ multiple: false });
-      if (typeof picked === "string" && picked) {
-        await tabsStore.getState().openFileByPath(picked);
-      }
-    }).then((un) => unlisteners.push(un));
-    void listen("menu:settings", () => {
-      setSettingsOpen(true);
-    }).then((un) => unlisteners.push(un));
-    return () => unlisteners.forEach((un) => un());
+    };
+    void curWin
+      .listen("menu:open-folder", async () => {
+        const picked = await pickDialog({ directory: true, multiple: false });
+        if (typeof picked === "string" && picked) {
+          await explorerStore.getState().openRoot(picked);
+          window.dispatchEvent(new CustomEvent("glance:activate-panel", { detail: "explorer" }));
+        }
+      })
+      .then(bind);
+    void curWin
+      .listen("menu:open-file", async () => {
+        const picked = await pickDialog({ multiple: false });
+        if (typeof picked === "string" && picked) {
+          await tabsStore.getState().openFileByPath(picked);
+        }
+      })
+      .then(bind);
+    void curWin
+      .listen("menu:settings", () => {
+        setSettingsOpen(true);
+      })
+      .then(bind);
+    return () => {
+      disposed = true;
+      unlisteners.forEach((un) => un());
+    };
   }, []);
 
   /** 拖动分隔条：按相邻两块的像素尺寸换算为 flex 权重 */

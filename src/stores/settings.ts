@@ -174,7 +174,10 @@ export const settingsStore = create<SettingsState>()((set, get) => ({
     });
     applyDomSettings(next);
     set(next);
-    persistSettings(next, persistDb);
+    // 拖拽调节期间仅更新内存态与 DOM，松手提交后再持久化（避免高频触发多窗口 storage 事件）
+    if (persistDb) {
+      persistSettings(next, true);
+    }
   },
 
   setSidebarWidth: (width, commitDb = false) => {
@@ -234,12 +237,21 @@ export const settingsStore = create<SettingsState>()((set, get) => ({
   },
 }));
 
-// 多窗口之间同步设置变更
+// 多窗口之间同步全局偏好（主题、字号、更新策略），侧栏/下栏尺寸保持各窗口独立
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === SETTINGS_STORAGE_KEY && e.newValue) {
       try {
-        const synced = normalizeSettings(JSON.parse(e.newValue) as Partial<AppSettings>);
+        const incoming = normalizeSettings(JSON.parse(e.newValue) as Partial<AppSettings>);
+        const cur = settingsStore.getState();
+        const synced: AppSettings = {
+          fontSize: incoming.fontSize,
+          theme: incoming.theme,
+          autoCheckUpdate: incoming.autoCheckUpdate,
+          autoDownloadUpdate: incoming.autoDownloadUpdate,
+          sidebarWidth: cur.sidebarWidth,
+          bottomPanelHeight: cur.bottomPanelHeight,
+        };
         applyDomSettings(synced);
         settingsStore.setState(synced);
       } catch {

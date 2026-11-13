@@ -65,8 +65,8 @@ impl SessionEntry {
             .map_err(|e| format!("请求传输 sftp subsystem 失败: {e}"))?;
         let config = russh_sftp::client::Config {
             request_timeout_secs: 60,
-            max_concurrent_reads: 32,
-            max_concurrent_writes: 32,
+            max_concurrent_reads: 64,
+            max_concurrent_writes: 64,
             ..Default::default()
         };
         SftpSession::new_with_config(channel.into_stream(), config)

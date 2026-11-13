@@ -26,6 +26,7 @@ function TreeGlyph({ entry }: { entry: FileEntryDto }) {
 export function TreeNode({ dirPath, depth, dropTargetDir, onContextMenu }: TreeNodeProps) {
   const children = explorerStore((s) => s.childrenMap[dirPath]);
   const expanded = explorerStore((s) => s.expanded[dirPath]);
+  const expandedMap = explorerStore((s) => s.expanded);
   const selectedPath = explorerStore((s) => s.selectedPath);
   const loading = explorerStore((s) => s.loadingDirs[dirPath]);
 
@@ -52,7 +53,7 @@ export function TreeNode({ dirPath, depth, dropTargetDir, onContextMenu }: TreeN
       {children.map((entry) => {
         const isSelected = selectedPath === entry.path;
         const isDir = entry.kind === "dir";
-        const isExpanded = !!explorerStore.getState().expanded[entry.path];
+        const isExpanded = !!expandedMap[entry.path];
         const isDropHover = isDir && dropTargetDir === entry.path;
 
         return (
