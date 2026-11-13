@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { lspApi } from "../../services/lsp";
 import { sshApi } from "../../services/ssh";
 import { explorerStore } from "../../stores/explorer";
+import { settingsStore } from "../../stores/settings";
 
 /**
  * 远程 LSP 桥。
@@ -91,6 +92,7 @@ class RemoteLspController {
   private pending = new Map<number, PendingRequest>();
   private openedDocs = new Map<string, monaco.editor.ITextModel>(); // modelUri → model
   private docVersions = new Map<string, number>();
+  private cachedMarkers = new Map<string, monaco.editor.IMarkerData[]>();
   private changeDisposals = new Map<string, monaco.IDisposable>();
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private providers: monaco.IDisposable[] = [];
@@ -228,7 +230,21 @@ class RemoteLspController {
         code: d.code != null ? String(d.code) : undefined,
       };
     });
-    monaco.editor.setModelMarkers(model, "remote-lsp", markers);
+    this.cachedMarkers.set(modelUri, markers);
+    const enabled = settingsStore.getState().showEditorDiagnostics;
+    monaco.editor.setModelMarkers(model, "remote-lsp", enabled ? markers : []);
+  }
+
+  /** 根据「代码报错显示」开关即时显示或隐藏当前已缓存的远程 LSP 诊断 */
+  syncDiagnosticsVisibility(enabled: boolean): void {
+    for (const [uri, model] of this.openedDocs) {
+      if (model.isDisposed()) continue;
+      monaco.editor.setModelMarkers(
+        model,
+        "remote-lsp",
+        enabled ? (this.cachedMarkers.get(uri) ?? []) : [],
+      );
+    }
   }
 
   // ── Monaco Provider 注册 ──────────────────────────────────────────────────
@@ -417,6 +433,7 @@ class RemoteLspController {
     const model = this.openedDocs.get(uri);
     if (!model) return;
     this.openedDocs.delete(uri);
+    this.cachedMarkers.delete(uri);
     this.changeDisposals.get(uri)?.dispose();
     this.changeDisposals.delete(uri);
     const timer = this.debounceTimers.get(uri);
@@ -501,6 +518,7 @@ class RemoteLspController {
       }
     }
     this.openedDocs.clear();
+    this.cachedMarkers.clear();
     this.changeDisposals.clear();
     this.debounceTimers.clear();
     if (this.lspId) {
@@ -747,6 +765,16 @@ class LspManager {
     }
     controller.attachModel(model);
   }
+
+  /** 按当前「代码报错显示」开关刷新或清空所有远程 LSP 诊断标记 */
+  syncDiagnosticsVisibility(enabled: boolean): void {
+    for (const c of this.controllers.values()) {
+      c.syncDiagnosticsVisibility(enabled);
+    }
+    if (!enabled) {
+      monaco.editor.removeAllMarkers("remote-lsp");
+    }
+  }
 }
 
 export const lspManager = new LspManager();
@@ -777,4 +805,11 @@ window.addEventListener("glance:session-connected", (e) => {
       if (uri.startsWith(prefix)) lspManager.handleModelCreated(uri);
     }
   });
+});
+
+let lastShowDiagnostics = settingsStore.getState().showEditorDiagnostics;
+settingsStore.subscribe((state) => {
+  if (state.showEditorDiagnostics === lastShowDiagnostics) return;
+  lastShowDiagnostics = state.showEditorDiagnostics;
+  lspManager.syncDiagnosticsVisibility(lastShowDiagnostics);
 });

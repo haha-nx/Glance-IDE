@@ -33,6 +33,7 @@ export function MonacoHost({ uri: customUri }: MonacoHostProps) {
   const activeTab = tabsStore((s) => s.tabs.find((t) => t.uri === targetUri));
   const fontSize = settingsStore((s) => s.fontSize);
   const theme = settingsStore((s) => s.theme);
+  const showEditorDiagnostics = settingsStore((s) => s.showEditorDiagnostics);
   const targetUriRef = useRef(targetUri);
   targetUriRef.current = targetUri;
 
@@ -40,7 +41,11 @@ export function MonacoHost({ uri: customUri }: MonacoHostProps) {
     if (!containerRef.current) return;
     setupMonaco();
 
-    const { fontSize: initialFontSize, theme: initialTheme } = settingsStore.getState();
+    const {
+      fontSize: initialFontSize,
+      theme: initialTheme,
+      showEditorDiagnostics: initialShowDiagnostics,
+    } = settingsStore.getState();
     const editor = monaco.editor.create(containerRef.current, {
       theme: monacoThemeFor(initialTheme),
       automaticLayout: true,
@@ -50,6 +55,7 @@ export function MonacoHost({ uri: customUri }: MonacoHostProps) {
       minimap: { enabled: true, scale: 1 },
       scrollBeyondLastLine: true,
       renderWhitespace: "selection",
+      renderValidationDecorations: initialShowDiagnostics ? "on" : "off",
       tabSize: 4,
       smoothScrolling: true,
       cursorBlinking: "smooth",
@@ -139,10 +145,16 @@ export function MonacoHost({ uri: customUri }: MonacoHostProps) {
     return () => window.removeEventListener("glance:model-created", handleModelCreated);
   }, [targetUri]);
 
-  // 动态响应字体大小与主题变更
+  // 动态响应字体大小、主题与报错显示开关变更
   useEffect(() => {
     editorRef.current?.updateOptions({ fontSize });
   }, [fontSize]);
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({
+      renderValidationDecorations: showEditorDiagnostics ? "on" : "off",
+    });
+  }, [showEditorDiagnostics]);
 
   useEffect(() => {
     monaco.editor.setTheme(monacoThemeFor(theme));

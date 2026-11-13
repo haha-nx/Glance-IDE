@@ -19,6 +19,7 @@ export function GitDiffView({ uri, diff }: { uri: string; diff: GitDiffTabSpec }
 
   const fontSize = settingsStore((s) => s.fontSize);
   const theme = settingsStore((s) => s.theme);
+  const showEditorDiagnostics = settingsStore((s) => s.showEditorDiagnostics);
   const [sideBySide, setSideBySide] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -30,7 +31,11 @@ export function GitDiffView({ uri, diff }: { uri: string; diff: GitDiffTabSpec }
     if (!containerRef.current || diff.data.isBinary) return;
     setupMonaco();
 
-    const { fontSize: initSize, theme: initTheme } = settingsStore.getState();
+    const {
+      fontSize: initSize,
+      theme: initTheme,
+      showEditorDiagnostics: initDiagnostics,
+    } = settingsStore.getState();
     const diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
       theme: monacoThemeFor(initTheme),
       fontSize: initSize,
@@ -40,6 +45,7 @@ export function GitDiffView({ uri, diff }: { uri: string; diff: GitDiffTabSpec }
       readOnly: true,
       originalEditable: false,
       renderSideBySide: sideBySide,
+      renderValidationDecorations: initDiagnostics ? "on" : "off",
       scrollBeyondLastLine: false,
       renderIndicators: true,
       ignoreTrimWhitespace: false,
@@ -89,14 +95,15 @@ export function GitDiffView({ uri, diff }: { uri: string; diff: GitDiffTabSpec }
     }
   }, [diff.data.originalText, diff.data.modifiedText]);
 
-  // 同步字体大小、主题与并排/内联显示模式
+  // 同步字体大小、主题、报错显示开关与并排/内联显示模式
   useEffect(() => {
     monaco.editor.setTheme(monacoThemeFor(theme));
     diffEditorRef.current?.updateOptions({
       fontSize,
       renderSideBySide: sideBySide,
+      renderValidationDecorations: showEditorDiagnostics ? "on" : "off",
     });
-  }, [fontSize, theme, sideBySide]);
+  }, [fontSize, theme, sideBySide, showEditorDiagnostics]);
 
   const handleRefresh = async () => {
     setRefreshing(true);

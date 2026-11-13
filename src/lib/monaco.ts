@@ -1,5 +1,5 @@
 import * as monaco from "monaco-editor";
-import type { AppTheme } from "../stores/settings";
+import { settingsStore, type AppTheme } from "../stores/settings";
 // monaco-editor 0.5x exports 映射: "./*" -> "./esm/vs/*"，深路径无需 vs 前缀
 import editorWorker from "monaco-editor/editor/editor.worker?worker";
 import cssWorker from "monaco-editor/language/css/css.worker?worker";
@@ -113,6 +113,60 @@ export function setupMonaco(): void {
       "scrollbarSlider.hoverBackground": "#94a3b899",
     },
   });
+
+  // 按用户设置同步内置语言诊断校验（默认关闭），并监听后续开关与多窗口配置变更
+  let lastDiagnostics = settingsStore.getState().showEditorDiagnostics;
+  applyMonacoDiagnostics(lastDiagnostics);
+  settingsStore.subscribe((state) => {
+    if (state.showEditorDiagnostics === lastDiagnostics) return;
+    lastDiagnostics = state.showEditorDiagnostics;
+    applyMonacoDiagnostics(lastDiagnostics);
+  });
+}
+
+/** 同步 Monaco 内置语言（TS/JS/JSON/CSS）诊断报错校验开关 */
+export function applyMonacoDiagnostics(enabled: boolean): void {
+  const tsCurrent = monaco.typescript.typescriptDefaults.getDiagnosticsOptions();
+  monaco.typescript.typescriptDefaults.setDiagnosticsOptions({
+    ...tsCurrent,
+    noSemanticValidation: !enabled,
+    noSyntaxValidation: !enabled,
+    noSuggestionDiagnostics: !enabled,
+  });
+
+  const jsCurrent = monaco.typescript.javascriptDefaults.getDiagnosticsOptions();
+  monaco.typescript.javascriptDefaults.setDiagnosticsOptions({
+    ...jsCurrent,
+    // JS 默认仅执行语法与建议检查，关闭报错显示时全部禁用
+    noSemanticValidation: true,
+    noSyntaxValidation: !enabled,
+    noSuggestionDiagnostics: !enabled,
+  });
+
+  const jsonCurrent = monaco.json.jsonDefaults.diagnosticsOptions;
+  monaco.json.jsonDefaults.setDiagnosticsOptions({
+    ...jsonCurrent,
+    validate: enabled,
+  });
+
+  for (const cssDefaults of [
+    monaco.css.cssDefaults,
+    monaco.css.scssDefaults,
+    monaco.css.lessDefaults,
+  ]) {
+    cssDefaults.setOptions({
+      ...cssDefaults.options,
+      validate: enabled,
+    });
+  }
+
+  if (!enabled) {
+    // 同步清空已有报错标记，避免等待异步 Worker 回刷期间残留波浪线
+    const owners = new Set(monaco.editor.getModelMarkers({}).map((m) => m.owner));
+    for (const owner of owners) {
+      monaco.editor.removeAllMarkers(owner);
+    }
+  }
 }
 
 /** 扩展名 → Monaco languageId */

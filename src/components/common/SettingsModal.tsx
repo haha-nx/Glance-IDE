@@ -12,7 +12,7 @@ import { requestApplyUpdate, updaterStore } from "../../stores/updater";
 import { Button, Modal, PrimaryButton } from "./Modal";
 import { IS_MAC } from "../../lib/platform";
 
-type SettingsSection = "appearance" | "updates" | "about";
+export type SettingsSection = "appearance" | "editor" | "updates" | "about";
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -60,14 +60,15 @@ function ToggleSwitch({
   );
 }
 
-/** Glance IDE 完整设置界面：外观/字体/主题、GitHub 版本检测与更新、关于信息 */
+/** Glance IDE 完整设置界面：外观/字体/主题、编辑器、GitHub 版本检测与更新、关于信息 */
 export function SettingsModal({ onClose, initialSection = "appearance" }: SettingsModalProps) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
-  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.4" });
+  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.5" });
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const fontSize = settingsStore((s) => s.fontSize);
   const theme = settingsStore((s) => s.theme);
+  const showEditorDiagnostics = settingsStore((s) => s.showEditorDiagnostics);
   const autoCheckUpdate = settingsStore((s) => s.autoCheckUpdate);
   const autoDownloadUpdate = settingsStore((s) => s.autoDownloadUpdate);
   const updateSettings = settingsStore((s) => s.updateSettings);
@@ -101,6 +102,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
 
   const navItems: { id: SettingsSection; label: string; badge?: boolean }[] = [
     { id: "appearance", label: "外观与字体" },
+    { id: "editor", label: "编辑器" },
     { id: "updates", label: "版本与更新", badge: Boolean(updateResult?.hasUpdate) },
     { id: "about", label: "关于 Glance IDE" },
   ];
@@ -292,6 +294,33 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                     <span className="text-sky-400">const</span> glance ={" "}
                     <span className="text-emerald-400">&quot;Glance IDE 本地/远程工作台&quot;</span>;
                   </div>
+                </div>
+              </section>
+            </>
+          )}
+
+          {section === "editor" && (
+            <>
+              <section className="space-y-1">
+                <h3 className="text-xs font-semibold text-zinc-100">诊断与报错提示</h3>
+                <p className="text-[11px] text-zinc-400">
+                  控制代码编辑器内语法检查与语言服务器（LSP）诊断报错的显示策略。
+                </p>
+              </section>
+
+              <section className="rounded-lg border border-zinc-700 bg-zinc-900/70 divide-y divide-zinc-800">
+                <div className="flex items-center justify-between gap-4 px-3.5 py-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-zinc-100">报错显示</div>
+                    <p className="mt-0.5 text-[11px] text-zinc-400">
+                      默认关闭。关闭后隐藏编辑器内的红/黄波浪线与语法错误标记，包括 Monaco 内置语言（TS/JS/JSON/CSS）校验及远程 LSP 诊断；不影响代码补全、悬停提示与跳转定义。
+                    </p>
+                  </div>
+                  <ToggleSwitch
+                    checked={showEditorDiagnostics}
+                    onChange={(v) => updateSettings({ showEditorDiagnostics: v })}
+                    label="报错显示"
+                  />
                 </div>
               </section>
             </>
@@ -538,6 +567,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                 <ul className="list-disc pl-5 space-y-1 text-zinc-400">
                   <li>界面主题：{APP_THEMES.find((t) => t.id === theme)?.name ?? theme}</li>
                   <li>统一字号：{fontSize} px（编辑器 / Markdown / 终端）</li>
+                  <li>编辑器报错显示：{showEditorDiagnostics ? "已开启" : "已关闭（默认）"}</li>
                   <li>自动检测更新：{autoCheckUpdate ? "已开启" : "已关闭（默认）"}</li>
                   <li>自动下载安装包：{autoDownloadUpdate ? "已开启" : "已关闭（默认）"}</li>
                   <li>凭据存储：系统安全钥匙串（Windows Credential Manager / macOS Keychain）</li>

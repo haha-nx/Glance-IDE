@@ -55,6 +55,8 @@ export const APP_THEMES: ThemeMeta[] = [
 export interface AppSettings {
   fontSize: number;
   theme: AppTheme;
+  /** 是否在代码编辑器中显示语法 / LSP 报错与诊断波浪线（默认关闭） */
+  showEditorDiagnostics: boolean;
   /** 是否在启动时自动检测更新（默认关闭） */
   autoCheckUpdate: boolean;
   /** 检测到新版本时是否自动下载安装包（默认关闭） */
@@ -69,6 +71,7 @@ const DB_SETTINGS_KEY = "settings.preferences.v1";
 export const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 13,
   theme: "dark",
+  showEditorDiagnostics: false,
   autoCheckUpdate: false,
   autoDownloadUpdate: false,
   sidebarWidth: 288,
@@ -96,6 +99,9 @@ function normalizeSettings(raw: Partial<AppSettings> | null | undefined): AppSet
   return {
     fontSize: clampFontSize(raw?.fontSize ?? DEFAULT_SETTINGS.fontSize),
     theme,
+    showEditorDiagnostics: Boolean(
+      raw?.showEditorDiagnostics ?? DEFAULT_SETTINGS.showEditorDiagnostics,
+    ),
     autoCheckUpdate: Boolean(raw?.autoCheckUpdate ?? DEFAULT_SETTINGS.autoCheckUpdate),
     autoDownloadUpdate: Boolean(raw?.autoDownloadUpdate ?? DEFAULT_SETTINGS.autoDownloadUpdate),
     sidebarWidth: clampSidebarWidth(raw?.sidebarWidth ?? DEFAULT_SETTINGS.sidebarWidth),
@@ -167,6 +173,7 @@ export const settingsStore = create<SettingsState>()((set, get) => ({
     const next = normalizeSettings({
       fontSize: patch.fontSize ?? cur.fontSize,
       theme: patch.theme ?? cur.theme,
+      showEditorDiagnostics: patch.showEditorDiagnostics ?? cur.showEditorDiagnostics,
       autoCheckUpdate: patch.autoCheckUpdate ?? cur.autoCheckUpdate,
       autoDownloadUpdate: patch.autoDownloadUpdate ?? cur.autoDownloadUpdate,
       sidebarWidth: patch.sidebarWidth ?? cur.sidebarWidth,
@@ -203,6 +210,7 @@ export const settingsStore = create<SettingsState>()((set, get) => ({
       return {
         fontSize: s.fontSize,
         theme: s.theme,
+        showEditorDiagnostics: s.showEditorDiagnostics,
         autoCheckUpdate: s.autoCheckUpdate,
         autoDownloadUpdate: s.autoDownloadUpdate,
         sidebarWidth: s.sidebarWidth,
@@ -247,6 +255,7 @@ if (typeof window !== "undefined") {
         const synced: AppSettings = {
           fontSize: incoming.fontSize,
           theme: incoming.theme,
+          showEditorDiagnostics: incoming.showEditorDiagnostics,
           autoCheckUpdate: incoming.autoCheckUpdate,
           autoDownloadUpdate: incoming.autoDownloadUpdate,
           sidebarWidth: cur.sidebarWidth,

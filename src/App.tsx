@@ -14,7 +14,7 @@ import { EditorArea } from "./components/editor/EditorArea";
 import { useGlobalSave } from "./components/editor/MonacoHost";
 import { TerminalPanel } from "./components/terminal/TerminalPanel";
 import { SaveConflictModal, UnsavedCloseModal } from "./components/editor/Dialogs";
-import { SettingsModal } from "./components/common/SettingsModal";
+import { SettingsModal, type SettingsSection } from "./components/common/SettingsModal";
 import { tabsStore } from "./stores/tabs";
 import { explorerStore } from "./stores/explorer";
 import { gitStore } from "./stores/git";
@@ -276,9 +276,7 @@ export function App() {
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [pendingWindowClose, setPendingWindowClose] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"appearance" | "updates" | "about">(
-    "appearance",
-  );
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [resizing, setResizing] = useState<"sidebar" | "bottom" | null>(null);
   const [sshReconnectFail, setSshReconnectFail] = useState<{
     profile: ConnectionProfileDto;
@@ -604,8 +602,7 @@ export function App() {
   // 打开设置并定位到指定分区
   useEffect(() => {
     const handler = (e: Event) => {
-      const section = (e as CustomEvent<{ section?: "appearance" | "updates" | "about" }>).detail
-        ?.section;
+      const section = (e as CustomEvent<{ section?: SettingsSection }>).detail?.section;
       if (section) setSettingsSection(section);
       setSettingsOpen(true);
     };
