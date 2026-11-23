@@ -267,7 +267,7 @@ export function RemotePanel() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto pl-2 pr-1 py-2">
         {loadError && (
           <p className="px-1 py-2 text-xs text-red-400">
             <IconWarning size={12} className="mr-1 inline" />

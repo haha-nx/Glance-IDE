@@ -3,7 +3,7 @@ import { explorerStore } from "../../stores/explorer";
 import { tabsStore } from "../../stores/tabs";
 import { requestApplyUpdate, updaterStore } from "../../stores/updater";
 import type { ConnectionProfileDto } from "../../types/ssh";
-import type { SettingsSection } from "./SettingsModal";
+import type { SettingsSection } from "../../stores/settings";
 import { Button, DangerButton, Modal, PrimaryButton } from "./Modal";
 import { IconWarning } from "./icons";
 

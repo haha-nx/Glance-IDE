@@ -107,7 +107,7 @@ export function SearchPanel() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2 pb-2">
+      <div className="flex-1 overflow-y-auto pl-2 pr-1 pb-2">
         {isRemoteOrWsl && (
           <p className="px-1 py-1 text-xs text-zinc-500">
             暂不支持在 SSH / WSL 远程工作区中直接全文搜索。

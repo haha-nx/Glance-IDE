@@ -124,7 +124,7 @@ export function GitModals({
             </div>
           }
         >
-          <div className="max-h-80 overflow-y-auto space-y-2 text-xs">
+          <div className="max-h-80 overflow-y-auto space-y-2 pr-1 text-xs">
             {overview.worktrees.map((wt) => (
               <div
                 key={wt.path}

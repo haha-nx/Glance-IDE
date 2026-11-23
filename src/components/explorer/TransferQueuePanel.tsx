@@ -92,7 +92,7 @@ export function TransferQueuePanel() {
       </div>
 
       {queueExpanded && (
-        <div className="max-h-48 space-y-1.5 overflow-y-auto px-2.5 pb-2">
+        <div className="max-h-48 space-y-1.5 overflow-y-auto pl-2.5 pr-1 pb-2">
           {tasks.map((task) => {
             const isActive = task.status === "scanning" || task.status === "transferring";
             const pct = calcPercent(

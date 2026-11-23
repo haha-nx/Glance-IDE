@@ -271,8 +271,8 @@ export function useWorkspacePersistence({
     const unsub = tabsStore.subscribe((s) => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        const paths = s.tabs.filter((t) => !t.error && !t.diff).map((t) => t.path);
-        const active = s.tabs.find((t) => t.uri === s.activeId && !t.diff);
+        const paths = s.tabs.filter((t) => !t.error && !t.diff && !t.settings).map((t) => t.path);
+        const active = s.tabs.find((t) => t.uri === s.activeId && !t.diff && !t.settings);
         const payload = JSON.stringify({ paths, active: active?.path ?? null });
         void workspaceApi.setUiState("workspace.tabs", payload).catch(() => {});
       }, 800);

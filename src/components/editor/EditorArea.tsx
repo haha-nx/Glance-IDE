@@ -16,6 +16,9 @@ const GitDiffView = lazy(() =>
 const MarkdownWysiwyg = lazy(() =>
   import("../markdown/MarkdownWysiwyg").then((m) => ({ default: m.MarkdownWysiwyg })),
 );
+const SettingsTabView = lazy(() =>
+  import("./SettingsTabView").then((m) => ({ default: m.SettingsTabView })),
+);
 
 /**
  * 编辑器区（VS Code 风格多分组分屏）：
@@ -161,8 +164,10 @@ function EditorGroupView({ groupId }: { groupId: string }) {
   const [mdModes, setMdModes] = useState<Record<string, "preview" | "source">>({});
 
   const active = tabs.find((t) => t.uri === group?.activeUri);
+  const isSettings = !!active?.settings;
   const isDiff = !!active?.diff;
-  const isMarkdown = !!active && !active.error && !isDiff && /\.(md|markdown)$/i.test(active.name);
+  const isMarkdown =
+    !!active && !active.error && !isDiff && !isSettings && /\.(md|markdown)$/i.test(active.name);
   const mdMode = active ? (mdModes[active.uri] ?? "preview") : "preview";
   const setMdMode = (m: "preview" | "source") => {
     if (active) setMdModes((s) => ({ ...s, [active.uri]: m }));
@@ -205,6 +210,18 @@ function EditorGroupView({ groupId }: { groupId: string }) {
           请选择或打开一个文件
         </div>
       );
+  } else if (active.settings) {
+    content = (
+      <Suspense
+        fallback={
+          <div className="flex flex-1 items-center justify-center text-xs text-zinc-500">
+            正在加载设置...
+          </div>
+        }
+      >
+        <SettingsTabView />
+      </Suspense>
+    );
   } else if (active.diff) {
     content = (
       <Suspense fallback={<div className="flex flex-1 items-center justify-center text-xs text-zinc-500">正在加载对比视图...</div>}>

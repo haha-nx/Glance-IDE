@@ -248,3 +248,13 @@ export function IconFolderPlus(p: IconProps) {
     </Svg>
   );
 }
+
+/** 设置（齿轮） */
+export function IconSettings(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="8" cy="8" r="2.1" />
+      <path d="M6.8 2h2.4l.4 1.6a4.7 4.7 0 0 1 1.1.6l1.5-.6 1.2 2.1-1.2 1.1a4.7 4.7 0 0 1 0 1.2l1.2 1.1-1.2 2.1-1.5-.6a4.7 4.7 0 0 1-1.1.6L9.2 14H6.8l-.4-1.6a4.7 4.7 0 0 1-1.1-.6l-1.5.6-1.2-2.1 1.2-1.1a4.7 4.7 0 0 1 0-1.2L2.6 5.7l1.2-2.1 1.5.6a4.7 4.7 0 0 1 1.1-.6Z" />
+    </Svg>
+  );
+}

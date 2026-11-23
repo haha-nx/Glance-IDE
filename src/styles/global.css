@@ -179,13 +179,13 @@ body,
 
 /* 滚动条 */
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 *::-webkit-scrollbar-thumb {
   background: var(--glance-scrollbar);
-  border-radius: 5px;
-  border: 2px solid transparent;
+  border-radius: 9999px;
+  border: 1.5px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
@@ -197,6 +197,13 @@ body,
 }
 *::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* 纵向滚动容器统一预留滚动条槽位宽度，防止高度/宽度变化新增滚动条导致内部组件压缩 */
+.glance-scroll-y,
+.overflow-y-auto,
+.overflow-auto {
+  scrollbar-gutter: stable;
 }
 
 /* Markdown 预览（M1） */

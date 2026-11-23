@@ -11,7 +11,6 @@ import { ExplorerPanel } from "./components/explorer/ExplorerPanel";
 import { EditorArea } from "./components/editor/EditorArea";
 import { useGlobalSave } from "./components/editor/MonacoHost";
 import { SaveConflictModal, UnsavedCloseModal } from "./components/editor/Dialogs";
-import type { SettingsSection } from "./components/common/SettingsModal";
 
 const SearchPanel = lazy(() =>
   import("./components/search/SearchPanel").then((m) => ({ default: m.SearchPanel })),
@@ -28,9 +27,6 @@ const DiscoveryPanel = lazy(() =>
 const TerminalPanel = lazy(() =>
   import("./components/terminal/TerminalPanel").then((m) => ({ default: m.TerminalPanel })),
 );
-const SettingsModal = lazy(() =>
-  import("./components/common/SettingsModal").then((m) => ({ default: m.SettingsModal })),
-);
 import { tabsStore } from "./stores/tabs";
 import { explorerStore } from "./stores/explorer";
 import { gitStore } from "./stores/git";
@@ -40,6 +36,7 @@ import {
   clampSidebarWidth,
   DEFAULT_SETTINGS,
   settingsStore,
+  type SettingsSection,
 } from "./stores/settings";
 import { updaterStore } from "./stores/updater";
 import { workspaceApi } from "./services/workspace";
@@ -61,8 +58,6 @@ export function App() {
   const [terminalCount, setTerminalCount] = useState(0);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [pendingWindowClose, setPendingWindowClose] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [resizing, setResizing] = useState<"sidebar" | "bottom" | null>(null);
   const [sshReconnectFail, setSshReconnectFail] = useState<SshReconnectFailState | null>(null);
   /** 运行中的 SSH 会话意外掉线（设备关机 / 网络中断） */
@@ -72,6 +67,11 @@ export function App() {
   const bottomPanelHeight = settingsStore((s) => s.bottomPanelHeight);
   const [pendingUpdatePath, setPendingUpdatePath] = useState<string | null>(null);
   const startupParamsHandledRef = useRef(false);
+
+  const openSettingsTab = useCallback((section?: SettingsSection) => {
+    setTerminalMaximized(false);
+    tabsStore.getState().openSettings(section);
+  }, []);
 
   const handleSshReconnectFailed = useCallback(
     (profile: ConnectionProfileDto, reason: string) => {
@@ -172,8 +172,7 @@ export function App() {
 
     void getCurrentWebviewWindow()
       .listen("menu:settings", () => {
-        setSettingsSection("appearance");
-        setSettingsOpen(true);
+        openSettingsTab("appearance");
       })
       .then((fn) => {
         if (disposed) {
@@ -186,8 +185,7 @@ export function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === ",") {
         e.preventDefault();
-        setSettingsSection("appearance");
-        setSettingsOpen(true);
+        openSettingsTab("appearance");
       } else if ((e.metaKey || e.ctrlKey) && e.shiftKey) {
         const k = e.key.toLowerCase();
         if (k === "g") {
@@ -478,12 +476,11 @@ export function App() {
   useEffect(() => {
     const handler = (e: Event) => {
       const section = (e as CustomEvent<{ section?: SettingsSection }>).detail?.section;
-      if (section) setSettingsSection(section);
-      setSettingsOpen(true);
+      openSettingsTab(section);
     };
     window.addEventListener("glance:open-settings", handler);
     return () => window.removeEventListener("glance:open-settings", handler);
-  }, []);
+  }, [openSettingsTab]);
 
   // 执行更新重启前统一检查未保存标签页
   useEffect(() => {
@@ -491,7 +488,6 @@ export function App() {
       const savedPath = (e as CustomEvent<{ savedPath?: string }>).detail?.savedPath;
       if (!savedPath) return;
       if (tabsStore.getState().hasDirty()) {
-        setSettingsOpen(false);
         setPendingUpdatePath(savedPath);
       } else {
         void updaterStore.getState().applyUpdate(savedPath);
@@ -631,10 +627,7 @@ export function App() {
       <TitleBar
         onToggleTerminal={() => setBottomPanelOpen((v) => !v)}
         onNewTerminal={handleNewTerminal}
-        onOpenSettings={() => {
-          setSettingsSection("appearance");
-          setSettingsOpen(true);
-        }}
+        onOpenSettings={() => openSettingsTab("appearance")}
         onRequestClose={() => {
           if (tabsStore.getState().hasDirty()) {
             setPendingWindowClose(true);
@@ -743,16 +736,6 @@ export function App() {
       {/* 关闭脏文件确认 */}
       <UnsavedCloseModal />
 
-      {/* 设置界面 */}
-      {settingsOpen && (
-        <Suspense fallback={null}>
-          <SettingsModal
-            initialSection={settingsSection}
-            onClose={() => setSettingsOpen(false)}
-          />
-        </Suspense>
-      )}
-
       <AppOverlays
         pendingUpdatePath={pendingUpdatePath}
         onClearPendingUpdate={() => setPendingUpdatePath(null)}
@@ -766,10 +749,7 @@ export function App() {
         sshLost={sshLost}
         onClearSshLost={() => setSshLost(null)}
         onReconnectLostSession={(lost) => void handleReconnectLostSession(lost)}
-        onOpenSettings={(section) => {
-          setSettingsSection(section);
-          setSettingsOpen(true);
-        }}
+        onOpenSettings={(section) => openSettingsTab(section)}
         onSwitchPanel={setActivePanel}
       />
     </div>

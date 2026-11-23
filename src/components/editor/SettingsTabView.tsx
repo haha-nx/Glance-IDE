@@ -2,23 +2,18 @@ import { useEffect, useState } from "react";
 import { appApi } from "../../services/files";
 import { updaterApi } from "../../services/updater";
 import { calcPercent, formatBytes, formatSpeed } from "../../lib/format";
+import { IS_MAC } from "../../lib/platform";
 import {
   APP_THEMES,
   DEFAULT_SETTINGS,
   settingsStore,
   type AppTheme,
+  type SettingsSection,
 } from "../../stores/settings";
+import { tabsStore } from "../../stores/tabs";
 import { requestApplyUpdate, updaterStore } from "../../stores/updater";
-import { Button, Modal, PrimaryButton } from "./Modal";
-import { IconFile, IconFolder } from "./icons";
-import { IS_MAC } from "../../lib/platform";
-
-export type SettingsSection = "appearance" | "editor" | "ssh" | "updates" | "about";
-
-interface SettingsModalProps {
-  onClose: () => void;
-  initialSection?: SettingsSection;
-}
+import { Button, PrimaryButton } from "../common/Modal";
+import { IconFile, IconFolder } from "../common/icons";
 
 function formatTime(ts: number | null): string {
   if (!ts) return "";
@@ -61,10 +56,11 @@ function ToggleSwitch({
   );
 }
 
-/** Glance IDE 完整设置界面：外观/字体/主题、编辑器、GitHub 版本检测与更新、关于信息 */
-export function SettingsModal({ onClose, initialSection = "appearance" }: SettingsModalProps) {
-  const [section, setSection] = useState<SettingsSection>(initialSection);
-  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.7" });
+/** 编辑器内置设置标签页：外观与字体、编辑器、SSH 与终端、版本与更新、关于 */
+export function SettingsTabView() {
+  const section = tabsStore((s) => s.settingsSection);
+  const setSection = tabsStore((s) => s.setSettingsSection);
+  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.8" });
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const fontSize = settingsStore((s) => s.fontSize);
@@ -113,55 +109,53 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
   ];
 
   return (
-    <Modal
-      title="设置"
-      onClose={onClose}
-      width={720}
-      footer={
-        <div className="flex w-full items-center justify-between">
-          <Button
-            onClick={resetAppearance}
-            className="border border-zinc-700 bg-zinc-900 text-xs text-zinc-400 hover:bg-zinc-700 hover:text-zinc-100"
-          >
-            恢复默认外观
-          </Button>
-          <PrimaryButton onClick={onClose}>完成</PrimaryButton>
-        </div>
-      }
-    >
-      <div className="flex min-h-[380px] max-h-[66vh] text-sm">
-        {/* 左侧分类导航 */}
-        <nav className="w-40 shrink-0 border-r border-zinc-700/80 pr-3 space-y-1">
+    <div className="flex h-full min-h-0 w-full bg-[var(--glance-bg)] text-sm select-none">
+      {/* 左侧分类导航 */}
+      <aside className="flex w-44 shrink-0 flex-col min-h-0 border-r border-zinc-800 bg-zinc-950/60 p-3">
+        <nav className="min-h-0 flex-1 overflow-y-auto space-y-1 pr-0.5">
           {navItems.map((item) => {
             const active = section === item.id;
             return (
               <button
                 key={item.id}
+                type="button"
                 onClick={() => setSection(item.id)}
                 className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-xs transition-colors ${
                   active
                     ? "bg-sky-600/20 text-sky-400 font-medium border border-sky-500/30"
-                    : "text-zinc-400 hover:bg-zinc-700/50 hover:text-zinc-200 border border-transparent"
+                    : "text-zinc-400 hover:bg-zinc-800/70 hover:text-zinc-200 border border-transparent"
                 }`}
               >
-                <span>{item.label}</span>
+                <span className="truncate">{item.label}</span>
                 {item.badge && (
-                  <span className="h-2 w-2 rounded-full bg-sky-400" title="发现新版本" />
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-sky-400" title="发现新版本" />
                 )}
               </button>
             );
           })}
         </nav>
 
-        {/* 右侧设置内容区 */}
-        <div className="min-w-0 flex-1 overflow-y-auto pl-5 pr-1 space-y-5">
+        <div className="mt-3 shrink-0 border-t border-zinc-800 pt-3">
+          <Button
+            type="button"
+            onClick={resetAppearance}
+            className="w-full border border-zinc-700 bg-zinc-900 text-xs text-zinc-400 hover:bg-zinc-700 hover:text-zinc-100"
+          >
+            恢复默认外观
+          </Button>
+        </div>
+      </aside>
+
+      {/* 右侧设置内容区（全局 scrollbar-gutter: stable 预留滚动条槽位） */}
+      <div className="min-w-0 flex-1 overflow-y-auto pl-6 pr-4 py-5">
+        <div className="mx-auto max-w-2xl space-y-5">
           {section === "appearance" && (
             <>
               {/* 主题设置 */}
               <section className="space-y-2.5">
                 <h3 className="text-xs font-semibold text-zinc-100">颜色主题</h3>
 
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-2.5">
                   {APP_THEMES.map((t) => {
                     const selected = theme === t.id;
                     return (
@@ -201,9 +195,9 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                         </div>
 
                         <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-medium text-zinc-100">{t.name}</span>
+                          <span className="truncate text-xs font-medium text-zinc-100">{t.name}</span>
                           {selected && (
-                            <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-medium text-sky-400">
+                            <span className="shrink-0 rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-medium text-sky-400">
                               使用中
                             </span>
                           )}
@@ -216,12 +210,12 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
 
               {/* 编辑器与终端字号 */}
               <section className="space-y-3 border-t border-zinc-700/70 pt-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <h3 className="text-xs font-semibold text-zinc-100">编辑器与终端字号</h3>
                   <button
                     type="button"
                     onClick={() => updateSettings({ fontSize: DEFAULT_SETTINGS.fontSize })}
-                    className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+                    className="shrink-0 rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
                   >
                     默认 13px
                   </button>
@@ -232,7 +226,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                     type="button"
                     onClick={() => updateSettings({ fontSize: fontSize - 1 })}
                     disabled={fontSize <= 10}
-                    className="flex h-7 w-7 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-40"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-40"
                     title="减小字号"
                   >
                     −
@@ -244,13 +238,13 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                     step={1}
                     value={fontSize}
                     onChange={(e) => updateSettings({ fontSize: Number(e.target.value) })}
-                    className="flex-1 accent-sky-500 cursor-pointer"
+                    className="min-w-0 flex-1 accent-sky-500 cursor-pointer"
                   />
                   <button
                     type="button"
                     onClick={() => updateSettings({ fontSize: fontSize + 1 })}
                     disabled={fontSize >= 24}
-                    className="flex h-7 w-7 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-40"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-40"
                     title="增大字号"
                   >
                     +
@@ -262,7 +256,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
 
                 {/* 常用快捷档位 */}
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-zinc-400 mr-1">快捷字号：</span>
+                  <span className="mr-1 text-[11px] text-zinc-400">快捷字号：</span>
                   {[12, 13, 14, 15, 16, 18].map((sz) => (
                     <button
                       key={sz}
@@ -281,7 +275,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
 
                 {/* 字号实时预览 */}
                 <div
-                  className="rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 font-mono text-zinc-300 select-text"
+                  className="overflow-x-auto rounded-lg border border-zinc-700 bg-zinc-950 px-3.5 py-2.5 font-mono text-zinc-300 select-text"
                   style={{ fontSize: `${fontSize}px`, lineHeight: 1.55 }}
                 >
                   <div>
@@ -293,14 +287,14 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
 
               {/* 资源管理器文字缩放 */}
               <section className="space-y-3 border-t border-zinc-700/70 pt-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <h3 className="text-xs font-semibold text-zinc-100">资源管理器文字缩放</h3>
                   <button
                     type="button"
                     onClick={() =>
                       updateSettings({ explorerFontScale: DEFAULT_SETTINGS.explorerFontScale })
                     }
-                    className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+                    className="shrink-0 rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
                   >
                     默认 100%
                   </button>
@@ -311,7 +305,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                     type="button"
                     onClick={() => updateSettings({ explorerFontScale: explorerFontScale - 10 })}
                     disabled={explorerFontScale <= 80}
-                    className="flex h-7 w-7 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-40"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-40"
                     title="缩小资源管理器文字"
                   >
                     −
@@ -323,13 +317,13 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                     step={5}
                     value={explorerFontScale}
                     onChange={(e) => updateSettings({ explorerFontScale: Number(e.target.value) })}
-                    className="flex-1 accent-sky-500 cursor-pointer"
+                    className="min-w-0 flex-1 accent-sky-500 cursor-pointer"
                   />
                   <button
                     type="button"
                     onClick={() => updateSettings({ explorerFontScale: explorerFontScale + 10 })}
                     disabled={explorerFontScale >= 200}
-                    className="flex h-7 w-7 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-40"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-zinc-700 bg-zinc-800 text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-40"
                     title="放大资源管理器文字"
                   >
                     +
@@ -340,7 +334,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-zinc-400 mr-1">快捷缩放：</span>
+                  <span className="mr-1 text-[11px] text-zinc-400">快捷缩放：</span>
                   {[85, 100, 115, 130, 150, 175].map((pct) => (
                     <button
                       key={pct}
@@ -398,7 +392,9 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
 
               <section className="rounded-lg border border-zinc-700 bg-zinc-900/70 divide-y divide-zinc-800">
                 <div className="flex items-center justify-between gap-4 px-3.5 py-3">
-                  <span className="text-xs font-medium text-zinc-100">显示代码语法报错</span>
+                  <span className="min-w-0 text-xs font-medium text-zinc-100">
+                    显示代码语法报错
+                  </span>
                   <ToggleSwitch
                     checked={showEditorDiagnostics}
                     onChange={(v) => updateSettings({ showEditorDiagnostics: v })}
@@ -407,7 +403,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                 </div>
 
                 <div className="flex items-center justify-between gap-4 px-3.5 py-3">
-                  <span className="text-xs font-medium text-zinc-100">
+                  <span className="min-w-0 text-xs font-medium text-zinc-100">
                     打开新文件时替换未修改标签
                   </span>
                   <ToggleSwitch
@@ -428,7 +424,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
 
               <section className="rounded-lg border border-zinc-700 bg-zinc-900/70 divide-y divide-zinc-800">
                 <div className="flex items-center justify-between gap-4 px-3.5 py-3">
-                  <span className="text-xs font-medium text-zinc-100">
+                  <span className="min-w-0 text-xs font-medium text-zinc-100">
                     SSH 连接成功自动打开终端
                   </span>
                   <ToggleSwitch
@@ -446,14 +442,14 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
               {/* 当前版本与手动检查更新 */}
               <section className="rounded-lg border border-zinc-700 bg-zinc-900/90 p-3.5 space-y-3">
                 <div className="flex items-center justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <h3 className="text-sm font-semibold text-zinc-100">{appInfo.name}</h3>
                       <span className="rounded bg-zinc-800 border border-zinc-700 px-1.5 py-0.5 font-mono text-[11px] text-sky-400">
                         v{appInfo.version}
                       </span>
                     </div>
-                    <p className="mt-1 text-[11px] text-zinc-400">
+                    <p className="mt-1 truncate text-[11px] text-zinc-400">
                       更新源：GitHub Releases (haha-nx/Glance-IDE)
                       {lastCheckedAt ? ` · 上次检查：${formatTime(lastCheckedAt)}` : ""}
                     </p>
@@ -472,7 +468,9 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
               {/* 自动更新开关（默认全部关闭） */}
               <section className="rounded-lg border border-zinc-700 bg-zinc-900/70 divide-y divide-zinc-800">
                 <div className="flex items-center justify-between gap-4 px-3.5 py-3">
-                  <span className="text-xs font-medium text-zinc-100">启动时自动检测更新</span>
+                  <span className="min-w-0 text-xs font-medium text-zinc-100">
+                    启动时自动检测更新
+                  </span>
                   <ToggleSwitch
                     checked={autoCheckUpdate}
                     onChange={(v) => updateSettings({ autoCheckUpdate: v })}
@@ -481,7 +479,7 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                 </div>
 
                 <div className="flex items-center justify-between gap-4 px-3.5 py-3">
-                  <span className="text-xs font-medium text-zinc-100">
+                  <span className="min-w-0 text-xs font-medium text-zinc-100">
                     发现新版本自动下载更新包
                   </span>
                   <ToggleSwitch
@@ -509,23 +507,23 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
               {updateResult && updateResult.hasUpdate && (
                 <div className="rounded-lg border border-sky-500/50 bg-zinc-900 p-3.5 space-y-3">
                   <div className="flex items-center justify-between gap-2">
-                    <div>
+                    <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="rounded bg-sky-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                        <span className="shrink-0 rounded bg-sky-600 px-1.5 py-0.5 text-[10px] font-medium text-white">
                           发现新版本
                         </span>
                         <span className="font-mono text-xs font-semibold text-zinc-100">
                           v{updateResult.currentVersion} → v{updateResult.latestVersion}
                         </span>
                       </div>
-                      <p className="mt-1 text-xs font-medium text-zinc-200">
+                      <p className="mt-1 truncate text-xs font-medium text-zinc-200">
                         {updateResult.releaseName}
                       </p>
                     </div>
                   </div>
 
                   {updateResult.releaseNotes && (
-                    <div className="max-h-32 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-2.5 text-[11px] text-zinc-300 whitespace-pre-wrap select-text">
+                    <div className="max-h-36 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-2.5 text-[11px] text-zinc-300 whitespace-pre-wrap select-text">
                       {updateResult.releaseNotes}
                     </div>
                   )}
@@ -659,7 +657,11 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
                   <span className="text-sm font-semibold text-zinc-100">{appInfo.name}</span>
                   <span className="font-mono text-xs text-sky-400">v{appInfo.version}</span>
                 </div>
-                <p className="text-zinc-400">{IS_MAC ? "本地 / 远程 SSH 一体化桌面开发工作台" : "本地 / 远程 SSH / WSL 一体化桌面开发工作台"}</p>
+                <p className="text-zinc-400">
+                  {IS_MAC
+                    ? "本地 / 远程 SSH 一体化桌面开发工作台"
+                    : "本地 / 远程 SSH / WSL 一体化桌面开发工作台"}
+                </p>
               </div>
 
               <div className="rounded-lg border border-zinc-700 bg-zinc-900 p-4 space-y-2 text-zinc-300">
@@ -688,6 +690,6 @@ export function SettingsModal({ onClose, initialSection = "appearance" }: Settin
           )}
         </div>
       </div>
-    </Modal>
+    </div>
   );
 }

@@ -3,7 +3,7 @@ import type { FileEntryDto } from "../types/ipc";
 import { filesApi, FsError } from "../services/files";
 import { gitApi, type GitFileDiffDto, type GitFileDiffRequest } from "../services/git";
 import { getOrCreateModel, setModelValueQuiet, disposeModel, getModel, toModelUri } from "../lib/models";
-import { settingsStore } from "./settings";
+import { settingsStore, type SettingsSection } from "./settings";
 import { sshReconnectStore } from "./sshReconnect";
 import { showErrorToast } from "./toast";
 
@@ -25,6 +25,8 @@ export interface GitDiffTabSpec {
   data: GitFileDiffDto;
 }
 
+export const SETTINGS_TAB_URI = "settings://glance";
+
 export interface EditorTab {
   /** 资源 URI，同时作为标签唯一 ID */
   uri: string;
@@ -39,6 +41,8 @@ export interface EditorTab {
   error?: string;
   /** Git 文件对比标签内容（非普通磁盘编辑文件） */
   diff?: GitDiffTabSpec;
+  /** 内置设置标签页 */
+  settings?: boolean;
 }
 
 export interface SaveConflict {
@@ -81,11 +85,15 @@ interface TabsState {
   saving: boolean;
   /** 待执行的编辑器定位（搜索跳转用） */
   pendingReveal: { uri: string; line: number } | null;
+  /** 设置标签页当前选中的分区 */
+  settingsSection: SettingsSection;
 
   openFile(entry: FileEntryDto, options?: OpenFileOptions): Promise<void>;
   openFileByPath(path: string, options?: OpenFileOptions): Promise<void>;
   openFileAtLine(path: string, line: number): Promise<void>;
   openGitDiff(params: { title: string; uriKey: string; request: GitFileDiffRequest }): Promise<void>;
+  openSettings(section?: SettingsSection): void;
+  setSettingsSection(section: SettingsSection): void;
   consumeReveal(): void;
   reopenFile(path: string, uri: string): Promise<void>;
   setActive(uri: string): void;
@@ -238,13 +246,13 @@ function findReplaceableTabUri(
 
   if (activeGroup?.activeUri) {
     const activeTab = tabMap.get(activeGroup.activeUri);
-    if (activeTab && !activeTab.dirty) {
+    if (activeTab && !activeTab.dirty && !activeTab.settings) {
       return activeTab.uri;
     }
   }
   for (const uri of candidates) {
     const tab = tabMap.get(uri);
-    if (tab && !tab.dirty) {
+    if (tab && !tab.dirty && !tab.settings) {
       return tab.uri;
     }
   }
@@ -332,6 +340,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
   pendingConflict: null,
   saving: false,
   pendingReveal: null,
+  settingsSection: "appearance",
 
   openFile: async (entry, options) => {
     if (entry.kind === "dir") return;
@@ -418,6 +427,70 @@ export const tabsStore = create<TabsState>()((set, get) => ({
     }
   },
 
+  openSettings: (section) => {
+    set((s) => {
+      const nextSection = section ?? s.settingsSection;
+      const existing = s.tabs.find((t) => t.uri === SETTINGS_TAB_URI);
+      if (existing) {
+        const activeGroup = s.groups[s.activeGroupId];
+        if (activeGroup?.tabUris.includes(SETTINGS_TAB_URI)) {
+          return {
+            settingsSection: nextSection,
+            activeId: SETTINGS_TAB_URI,
+            groups: {
+              ...s.groups,
+              [s.activeGroupId]: { ...activeGroup, activeUri: SETTINGS_TAB_URI },
+            },
+          };
+        }
+        const holder = Object.values(s.groups).find((g) => g.tabUris.includes(SETTINGS_TAB_URI));
+        if (holder) {
+          return {
+            settingsSection: nextSection,
+            activeGroupId: holder.id,
+            activeId: SETTINGS_TAB_URI,
+            groups: {
+              ...s.groups,
+              [holder.id]: { ...holder, activeUri: SETTINGS_TAB_URI },
+            },
+          };
+        }
+        if (activeGroup) {
+          return {
+            settingsSection: nextSection,
+            activeId: SETTINGS_TAB_URI,
+            groups: {
+              ...s.groups,
+              [s.activeGroupId]: {
+                ...activeGroup,
+                tabUris: [...activeGroup.tabUris, SETTINGS_TAB_URI],
+                activeUri: SETTINGS_TAB_URI,
+              },
+            },
+          };
+        }
+        return { settingsSection: nextSection, activeId: SETTINGS_TAB_URI };
+      }
+
+      const settingsTab: EditorTab = {
+        uri: SETTINGS_TAB_URI,
+        path: SETTINGS_TAB_URI,
+        name: "设置",
+        dirty: false,
+        mtimeMs: 0,
+        readonly: true,
+        settings: true,
+      };
+      const res = applyOpenedTab(s, settingsTab, false);
+      return {
+        ...res.patch,
+        settingsSection: nextSection,
+      };
+    });
+  },
+
+  setSettingsSection: (section) => set({ settingsSection: section }),
+
   consumeReveal: () => set({ pendingReveal: null }),
 
   reopenFile: async (path, uri) => {
@@ -500,7 +573,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
   saveTab: async (uri, overwrite = false) => {
     if (get().saving) return false; // 防止快捷键双通道并发保存
     const tab = get().tabs.find((t) => t.uri === uri);
-    if (!tab || tab.error || tab.diff) return true;
+    if (!tab || tab.error || tab.diff || tab.settings) return true;
     const model = getModel(uri);
     if (!model) return true;
 
@@ -671,7 +744,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
     set((s) => {
       let anyChanged = false;
       const nextTabs = s.tabs.map((t) => {
-        if (t.diff) return t;
+        if (t.diff || t.settings) return t;
         const nextPath = matchesTarget(t.path);
         if (!nextPath) return t;
         anyChanged = true;
@@ -732,7 +805,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
 
     const staleUris: string[] = [];
     for (const t of get().tabs) {
-      if (!t.diff && !t.dirty && isAffected(t.path)) {
+      if (!t.diff && !t.settings && !t.dirty && isAffected(t.path)) {
         staleUris.push(t.uri);
       }
     }

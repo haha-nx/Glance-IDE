@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { tabsStore } from "../../stores/tabs";
 import { tabDragStore, type TabDragState } from "../../stores/tabDrag";
-import { IconClose, IconWarning } from "../../components/common/icons";
+import { IconClose, IconSettings, IconWarning } from "../../components/common/icons";
 
 interface TabBarProps {
   /** 所属编辑器分组 */
@@ -211,7 +211,7 @@ export function TabBar({ groupId, actions }: TabBarProps) {
                 onAuxClick={(e) => {
                   if (e.button === 1) closeInGroup(groupId, tab.uri);
                 }}
-                title={tab.path}
+                title={tab.settings ? "设置" : tab.path}
                 className={`group relative flex min-w-28 max-w-64 shrink-0 cursor-pointer items-center gap-1.5 border-r border-zinc-800 px-3 text-[13px] ${indicator} ${
                   isActive
                     ? `bg-zinc-900 ${isActiveGroup ? "text-zinc-100" : "text-zinc-400"}`
@@ -222,6 +222,10 @@ export function TabBar({ groupId, actions }: TabBarProps) {
                 {tab.error ? (
                   <span className="text-red-400">
                     <IconWarning size={14} />
+                  </span>
+                ) : tab.settings ? (
+                  <span className="shrink-0 text-sky-400">
+                    <IconSettings size={13} />
                   </span>
                 ) : tab.diff ? (
                   <span className="shrink-0 font-mono text-[11px] text-sky-400" title="文件对比">

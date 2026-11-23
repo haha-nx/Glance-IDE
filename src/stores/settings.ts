@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { workspaceApi } from "../services/workspace";
 
 export type AppTheme = "dark" | "midnight" | "nord" | "light";
+export type SettingsSection = "appearance" | "editor" | "ssh" | "updates" | "about";
 
 export interface ThemeMeta {
   id: AppTheme;
@@ -61,7 +62,7 @@ export interface AppSettings {
   showEditorDiagnostics: boolean;
   /** 是否在打开新文件时优先替换未修改标签，仅保留已修改文件（默认关闭） */
   keepOnlyModifiedTabs: boolean;
-  /** SSH 连接成功后是否自动打开终端面板（默认关闭） */
+  /** SSH 连接成功后是否自动打开终端面板（默认开启） */
   autoOpenTerminalOnSsh: boolean;
   /** 是否在启动时自动检测更新（默认关闭） */
   autoCheckUpdate: boolean;
@@ -80,7 +81,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: "dark",
   showEditorDiagnostics: false,
   keepOnlyModifiedTabs: false,
-  autoOpenTerminalOnSsh: false,
+  autoOpenTerminalOnSsh: true,
   autoCheckUpdate: false,
   autoDownloadUpdate: false,
   sidebarWidth: 288,

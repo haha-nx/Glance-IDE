@@ -87,7 +87,7 @@ export function StatusBar({ onToggleTerminal }: StatusBarProps) {
     <div className="flex h-6 items-center justify-between border-t border-zinc-800 bg-zinc-950 px-3 text-xs text-zinc-500">
       <div className="flex items-center gap-3 min-w-0">
         <span className="shrink-0 text-sky-500">{version || "Glance IDE"}</span>
-        {active && (
+        {active && !active.settings && (
           <span className="truncate" title={active.path}>
             {active.path}
           </span>
@@ -144,7 +144,7 @@ export function StatusBar({ onToggleTerminal }: StatusBarProps) {
         {dirtyCount > 0 && (
           <span className="text-amber-500">{dirtyCount} 个未保存</span>
         )}
-        {active && !active.error && (
+        {active && !active.error && !active.settings && (
           <>
             <span>
               行 {line}, 列 {column}
@@ -152,7 +152,7 @@ export function StatusBar({ onToggleTerminal }: StatusBarProps) {
             <span>UTF-8</span>
           </>
         )}
-        {active?.readonly && <span className="text-amber-500">只读</span>}
+        {active?.readonly && !active.settings && <span className="text-amber-500">只读</span>}
         <button
           onClick={onToggleTerminal}
           className="rounded px-1 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
