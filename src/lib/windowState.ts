@@ -62,3 +62,25 @@ export function takePendingProfileConnect(): string | null {
   pendingConnectProfileId = null;
   return value;
 }
+
+export type PendingSshTerminal = {
+  sessionId: string;
+  deviceIdentityId: string;
+};
+
+/** 待消费的「SSH 连接成功后自动打开终端」请求（适配 TerminalPanel 懒加载与 StrictMode 双挂载） */
+let pendingSshTerminal: PendingSshTerminal | null = null;
+
+export function setPendingSshTerminal(req: PendingSshTerminal | null): void {
+  pendingSshTerminal = req;
+}
+
+export function peekPendingSshTerminal(): PendingSshTerminal | null {
+  return pendingSshTerminal;
+}
+
+export function clearPendingSshTerminal(sessionId?: string): void {
+  if (!sessionId || pendingSshTerminal?.sessionId === sessionId) {
+    pendingSshTerminal = null;
+  }
+}

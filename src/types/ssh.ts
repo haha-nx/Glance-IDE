@@ -29,7 +29,8 @@ export type ConnectOutcome =
   | { status: "unknownIdentity"; keyAlgorithm: string; fingerprint: string }
   | { status: "identityChanged"; keyAlgorithm: string; fingerprint: string; expected: string[] }
   | { status: "authFailed"; message: string }
-  | { status: "networkError"; message: string };
+  | { status: "networkError"; message: string }
+  | { status: "cancelled" };
 
 export interface SessionDto {
   sessionId: string;

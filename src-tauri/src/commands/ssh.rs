@@ -48,6 +48,7 @@ pub enum ConnectOutcomeDto {
     NetworkError {
         message: String,
     },
+    Cancelled,
 }
 
 #[derive(Debug, Serialize)]
@@ -481,6 +482,7 @@ pub async fn connect_profile(
     window: tauri::Window,
     state: State<'_, AppState>,
     profile_id: String,
+    attempt_id: Option<String>,
 ) -> Result<ConnectOutcomeDto, CmdError> {
     let pid = parse_uuid(&profile_id, "profile_id")?;
     let row = connection_profiles::get_profile(&state.db, pid)?
@@ -496,7 +498,45 @@ pub async fn connect_profile(
         pool: pool.clone(),
     };
 
-    let outcome = match client::connect_and_auth(params).await {
+    let mut cancel_rx_guard = match attempt_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(aid) => match state.pending_connects.register(aid.to_string()) {
+            Some(pair) => Some(pair),
+            None => return Ok(ConnectOutcomeDto::Cancelled),
+        },
+        None => None,
+    };
+
+    let step = if let Some((ref mut cancel_rx, _)) = cancel_rx_guard {
+        tokio::select! {
+            biased;
+            _ = &mut *cancel_rx => {
+                return Ok(ConnectOutcomeDto::Cancelled);
+            }
+            res = client::connect_and_auth(params) => res,
+        }
+    } else {
+        client::connect_and_auth(params).await
+    };
+
+    if let Some((ref mut cancel_rx, _)) = cancel_rx_guard {
+        if !matches!(
+            cancel_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ) {
+            if let ConnectStep::Connected { handle, .. } = step {
+                let _ = handle
+                    .disconnect(russh::Disconnect::ByApplication, "cancelled", "en")
+                    .await;
+            }
+            return Ok(ConnectOutcomeDto::Cancelled);
+        }
+    }
+
+    let outcome = match step {
         ConnectStep::Connected { handle, device_identity_id, device_name } => {
             let _ = connection_profiles::touch_last_seen(&state.db, device_identity_id);
             let endpoint = format!("{}:{}", row.host, row.port);
@@ -668,6 +708,15 @@ pub async fn disconnect_session(
     Ok(state.sessions.disconnect(&sid).await)
 }
 
+#[tauri::command]
+pub fn cancel_ssh_connect(state: State<'_, AppState>, attempt_id: String) -> bool {
+    let trimmed = attempt_id.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    state.pending_connects.cancel(trimmed)
+}
+
 /// 供 lib.rs 在应用退出时清理全部会话
 pub async fn disconnect_all(sessions: &SessionManager) {
     for entry in sessions.list() {
@@ -703,6 +752,10 @@ mod tests {
         let v2: serde_json::Value = serde_json::to_value(&out2).unwrap();
         assert!(v2.get("sessionId").is_some(), "Connected 字段应为 camelCase: {v2}");
         assert!(v2.get("deviceIdentityId").is_some());
+
+        let out3 = ConnectOutcomeDto::Cancelled;
+        let v3: serde_json::Value = serde_json::to_value(&out3).unwrap();
+        assert_eq!(v3["status"], "cancelled");
     }
 
     #[test]

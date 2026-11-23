@@ -27,6 +27,8 @@ pub struct AppState {
     pub secrets: Box<dyn SecretStore>,
     /// 运行时 SSH 会话（权威状态在 Rust 侧）
     pub sessions: app_services::ssh_sessions::SessionManager,
+    /// 进行中的 SSH 连接尝试（支持在连接过程中立即取消）
+    pub pending_connects: Arc<app_services::ssh_sessions::PendingConnectRegistry>,
     /// PTY 终端通道注册表（M4）
     pub terminals: Arc<app_services::terminal::TerminalRegistry>,
     /// LSP 通道注册表（M6）
@@ -51,6 +53,7 @@ impl AppState {
             fs,
             secrets,
             sessions: Default::default(),
+            pending_connects: Default::default(),
             terminals: Default::default(),
             lsp: Default::default(),
             transfers: Default::default(),
@@ -86,6 +89,7 @@ fn resolve_menu_target_window(app: &tauri::AppHandle) -> Option<String> {
 
 /// 在退出或更新重启前清理活跃传输、终端、LSP 与 SSH 会话（异步等待，设总超时避免卡死退出）。
 pub async fn shutdown_runtime_sessions_async(state: &AppState) {
+    state.pending_connects.cancel_all();
     state.transfers.cancel_all();
     app_services::terminal::close_all(&state.terminals).await;
     app_services::lsp::close_all(&state.lsp);
@@ -109,6 +113,7 @@ pub async fn shutdown_runtime_sessions_async(state: &AppState) {
 
 /// 同步事件上下文下的会话回收（如最后一个窗口 Destroyed 事件）
 pub fn shutdown_runtime_sessions(state: &AppState) {
+    state.pending_connects.cancel_all();
     state.transfers.cancel_all();
     let terminals = state.terminals.clone();
     let sessions = state.sessions.clone();
@@ -408,6 +413,7 @@ pub fn run() {
             commands::ssh::approve_identity,
             commands::ssh::unbind_identity,
             commands::ssh::connect_profile,
+            commands::ssh::cancel_ssh_connect,
             commands::ssh::list_sessions,
             commands::ssh::disconnect_session,
             commands::ssh::remote_home,

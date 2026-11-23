@@ -4,6 +4,7 @@ import { filesApi, FsError } from "../services/files";
 import { gitApi, type GitFileDiffDto, type GitFileDiffRequest } from "../services/git";
 import { getOrCreateModel, setModelValueQuiet, disposeModel, getModel, toModelUri } from "../lib/models";
 import { settingsStore } from "./settings";
+import { sshReconnectStore } from "./sshReconnect";
 import { showErrorToast } from "./toast";
 
 /**
@@ -334,6 +335,9 @@ export const tabsStore = create<TabsState>()((set, get) => ({
 
   openFile: async (entry, options) => {
     if (entry.kind === "dir") return;
+    if (!options?.preserveExisting && !entry.path.startsWith("remote://")) {
+      sshReconnectStore.getState().cancelForLocalOpen();
+    }
     const uri = toModelUri(entry.path);
     const existing = get().tabs.find((t) => t.uri === uri);
     // 只有当标签已存在、且无错误、且 Monaco Model 已经成功建立时，才直接激活；

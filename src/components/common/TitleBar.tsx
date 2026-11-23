@@ -5,6 +5,7 @@ import { open as pickDialog } from "@tauri-apps/plugin-dialog";
 import { appApi, filesApi } from "../../services/files";
 import { updaterApi } from "../../services/updater";
 import { explorerStore } from "../../stores/explorer";
+import { sshReconnectStore } from "../../stores/sshReconnect";
 import { tabsStore } from "../../stores/tabs";
 import { getOrCreateModel } from "../../lib/models";
 import { IS_MAC } from "../../lib/platform";
@@ -280,6 +281,7 @@ export function TitleBar({
 
   const openFolder = async () => {
     setActiveMenu(null);
+    sshReconnectStore.getState().cancelForLocalOpen();
     const picked = await pickDialog({ directory: true, multiple: false });
     if (typeof picked === "string" && picked) {
       await explorerStore.getState().openRoot(picked);
@@ -289,9 +291,16 @@ export function TitleBar({
 
   const openFile = async () => {
     setActiveMenu(null);
+    sshReconnectStore.getState().cancelForLocalOpen();
     const picked = await pickDialog({ multiple: false });
     if (typeof picked === "string" && picked) {
       await tabsStore.getState().openFileByPath(picked);
+      if (
+        sshReconnectStore.getState().consumeCancelledPendingRemote() &&
+        explorerStore.getState().rootPath?.startsWith("remote://")
+      ) {
+        explorerStore.getState().closeRoot();
+      }
     }
   };
 

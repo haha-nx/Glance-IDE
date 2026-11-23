@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { explorerStore } from "../stores/explorer";
+import { sshReconnectStore, type SshReconnectAttempt } from "../stores/sshReconnect";
 import { tabsStore } from "../stores/tabs";
 import { workspaceApi } from "../services/workspace";
 import { sshApi } from "../services/ssh";
@@ -96,9 +97,13 @@ export function useWorkspacePersistence({
           (!!lastProfileId && (lastPanel === "remote" || lastPanel === "ssh"));
 
         if (shouldReconnectSsh) {
+          if (sshReconnectStore.getState().startupCancelled) return;
           let targetProfile: ConnectionProfileDto | undefined;
+          let attempt: SshReconnectAttempt | null = null;
           try {
             const profiles = await sshApi.listProfiles();
+            if (sshReconnectStore.getState().startupCancelled) return;
+
             if (lastProfileId) {
               targetProfile = profiles.find((p) => p.id === lastProfileId);
             }
@@ -120,15 +125,21 @@ export function useWorkspacePersistence({
             }
 
             if (targetProfile) {
-              const outcome = await sshApi.connectProfile(targetProfile.id);
-              if (outcome.status === "connected") {
-                explorerStore.getState().invalidateRemote(outcome.deviceIdentityId);
-                window.dispatchEvent(
-                  new CustomEvent("glance:session-connected", {
-                    detail: { deviceIdentityId: outcome.deviceIdentityId, sessionId: outcome.sessionId },
-                  }),
-                );
+              attempt = sshReconnectStore.getState().beginStartup();
+              if (!attempt) return;
 
+              const outcome = await sshApi.connectProfile(targetProfile.id, attempt.attemptId);
+              if (
+                !sshReconnectStore.getState().isActive(attempt.generation) ||
+                outcome.status === "cancelled"
+              ) {
+                if (outcome.status === "connected") {
+                  void sshApi.disconnectSession(outcome.sessionId).catch(() => {});
+                }
+                return;
+              }
+
+              if (outcome.status === "connected") {
                 // 恢复工作区根目录
                 let finalRoot = root;
                 if (finalRoot && finalRoot.startsWith("remote://")) {
@@ -139,7 +150,26 @@ export function useWorkspacePersistence({
                   const cleanHome = home.startsWith("/") ? home : `/${home}`;
                   finalRoot = `remote://${outcome.deviceIdentityId}${cleanHome}`;
                 }
-                await explorerStore.getState().openRoot(finalRoot);
+
+                if (!sshReconnectStore.getState().isActive(attempt.generation)) {
+                  void sshApi.disconnectSession(outcome.sessionId).catch(() => {});
+                  return;
+                }
+                sshReconnectStore.getState().finish(attempt.generation);
+
+                explorerStore.getState().invalidateRemote(outcome.deviceIdentityId);
+                window.dispatchEvent(
+                  new CustomEvent("glance:session-connected", {
+                    detail: {
+                      deviceIdentityId: outcome.deviceIdentityId,
+                      sessionId: outcome.sessionId,
+                      initiatedHere: true,
+                    },
+                  }),
+                );
+
+                await explorerStore.getState().openRoot(finalRoot, { isRestore: true });
+                if (sshReconnectStore.getState().startupCancelled) return;
 
                 // 恢复已打开的远程文件标签
                 if (tabsJson) {
@@ -149,6 +179,7 @@ export function useWorkspacePersistence({
                       active?: string;
                     };
                     for (const p of parsed.paths ?? []) {
+                      if (sshReconnectStore.getState().startupCancelled) return;
                       let finalP = p;
                       if (p.startsWith("remote://")) {
                         const sub = p.replace(/^remote:\/\/[^/]+/, "");
@@ -156,7 +187,7 @@ export function useWorkspacePersistence({
                       }
                       await tabsStore.getState().openFileByPath(finalP, { preserveExisting: true });
                     }
-                    if (parsed.active) {
+                    if (parsed.active && !sshReconnectStore.getState().startupCancelled) {
                       let finalActive = parsed.active;
                       if (finalActive.startsWith("remote://")) {
                         const sub = finalActive.replace(/^remote:\/\/[^/]+/, "");
@@ -168,6 +199,10 @@ export function useWorkspacePersistence({
                 }
                 return;
               } else {
+                if (!sshReconnectStore.getState().isActive(attempt.generation)) {
+                  return;
+                }
+                sshReconnectStore.getState().finish(attempt.generation);
                 // 重连未成功（如设备指纹不匹配、密码错误、网络不可达等）
                 const reason =
                   outcome.status === "networkError" || outcome.status === "authFailed"
@@ -180,27 +215,45 @@ export function useWorkspacePersistence({
               }
             }
           } catch (err) {
+            if (attempt && !sshReconnectStore.getState().isActive(attempt.generation)) {
+              return;
+            }
+            if (!attempt && sshReconnectStore.getState().startupCancelled) {
+              return;
+            }
             console.error("SSH 自动重连异常:", err);
             if (targetProfile) {
               const reason = err instanceof CmdError ? err.message : String(err);
               callbacksRef.current.onSshReconnectFailed(targetProfile, reason);
               return;
             }
+          } finally {
+            if (attempt) {
+              sshReconnectStore.getState().finish(attempt.generation);
+            }
           }
         }
 
+        if (sshReconnectStore.getState().startupCancelled) return;
+
         // 常规本地/WSL 工作区恢复
         if (root && !root.startsWith("remote://")) {
-          await explorerStore.getState().openRoot(root);
+          await explorerStore.getState().openRoot(root, { isRestore: true });
         }
+        if (sshReconnectStore.getState().startupCancelled) return;
         if (tabsJson) {
           const parsed = JSON.parse(tabsJson) as { paths?: string[]; active?: string };
           for (const p of parsed.paths ?? []) {
+            if (sshReconnectStore.getState().startupCancelled) return;
             if (!p.startsWith("remote://")) {
               await tabsStore.getState().openFileByPath(p, { preserveExisting: true });
             }
           }
-          if (parsed.active && !parsed.active.startsWith("remote://")) {
+          if (
+            parsed.active &&
+            !parsed.active.startsWith("remote://") &&
+            !sshReconnectStore.getState().startupCancelled
+          ) {
             tabsStore.getState().setActive(toModelUri(parsed.active));
           }
         }

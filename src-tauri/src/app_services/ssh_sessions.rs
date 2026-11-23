@@ -5,10 +5,10 @@
 //! handle 与 SFTP 槽位均用 tokio::sync::Mutex：需要持锁跨 await，
 //! std MutexGuard 非 Send 会污染 async command 的 Future。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::sync::{oneshot, Mutex as AsyncMutex, Notify};
 use uuid::Uuid;
 
 use crate::filesystem::sftp::SftpFileSystem;
@@ -258,5 +258,131 @@ impl SessionManager {
             .disconnect(russh::Disconnect::ByApplication, "user disconnect", "en")
             .await;
         true
+    }
+}
+
+const MAX_RECENTLY_CANCELLED: usize = 32;
+
+#[derive(Default)]
+struct PendingConnectInner {
+    active: HashMap<String, oneshot::Sender<()>>,
+    recently_cancelled: VecDeque<String>,
+}
+
+/// 待完成 SSH 连接尝试注册表：支持前端打开本地文件/文件夹时立即取消握手，
+/// 并在前端先于后端注册到达取消请求时通过有界 `recently_cancelled` 捕获竞态。
+#[derive(Default)]
+pub struct PendingConnectRegistry {
+    inner: StdMutex<PendingConnectInner>,
+}
+
+pub struct ConnectAttemptGuard {
+    registry: Arc<PendingConnectRegistry>,
+    attempt_id: String,
+}
+
+impl Drop for ConnectAttemptGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.registry.inner.lock() {
+            guard.active.remove(&self.attempt_id);
+        }
+    }
+}
+
+impl PendingConnectRegistry {
+    pub fn register(
+        self: &Arc<Self>,
+        attempt_id: String,
+    ) -> Option<(oneshot::Receiver<()>, ConnectAttemptGuard)> {
+        let mut guard = self.inner.lock().unwrap();
+        if let Some(pos) = guard.recently_cancelled.iter().position(|id| id == &attempt_id) {
+            guard.recently_cancelled.remove(pos);
+            return None;
+        }
+        let (tx, rx) = oneshot::channel();
+        guard.active.insert(attempt_id.clone(), tx);
+        let attempt_guard = ConnectAttemptGuard {
+            registry: self.clone(),
+            attempt_id,
+        };
+        Some((rx, attempt_guard))
+    }
+
+    pub fn cancel(&self, attempt_id: &str) -> bool {
+        let sender = {
+            let mut guard = self.inner.lock().unwrap();
+            if let Some(tx) = guard.active.remove(attempt_id) {
+                Some(tx)
+            } else {
+                if !guard.recently_cancelled.iter().any(|id| id == attempt_id) {
+                    if guard.recently_cancelled.len() >= MAX_RECENTLY_CANCELLED {
+                        guard.recently_cancelled.pop_front();
+                    }
+                    guard.recently_cancelled.push_back(attempt_id.to_string());
+                }
+                None
+            }
+        };
+        if let Some(tx) = sender {
+            let _ = tx.send(());
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn cancel_all(&self) {
+        let senders: Vec<oneshot::Sender<()>> = {
+            let mut guard = self.inner.lock().unwrap();
+            guard.active.drain().map(|(_, tx)| tx).collect()
+        };
+        for tx in senders {
+            let _ = tx.send(());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_cancel_wakes_receiver_and_returns_true() {
+        let reg = Arc::new(PendingConnectRegistry::default());
+        let (mut rx, _guard) = reg.register("a1".into()).expect("should register");
+        assert!(reg.cancel("a1"));
+        assert_eq!(rx.try_recv(), Ok(()));
+        assert!(!reg.cancel("a1"));
+    }
+
+    #[test]
+    fn pre_cancel_causes_register_to_return_none() {
+        let reg = Arc::new(PendingConnectRegistry::default());
+        assert!(!reg.cancel("early-1"));
+        assert!(reg.register("early-1".into()).is_none());
+        // 第二次同 ID 注册不应被旧的 pre-cancel 重复消费
+        assert!(reg.register("early-1".into()).is_some());
+    }
+
+    #[test]
+    fn guard_drop_cleans_up_active_entry() {
+        let reg = Arc::new(PendingConnectRegistry::default());
+        {
+            let (_rx, _guard) = reg.register("drop-1".into()).expect("should register");
+            assert!(reg.inner.lock().unwrap().active.contains_key("drop-1"));
+        }
+        assert!(!reg.inner.lock().unwrap().active.contains_key("drop-1"));
+        assert!(!reg.cancel("drop-1"));
+    }
+
+    #[test]
+    fn cancel_all_wakes_all_registered_waiters() {
+        let reg = Arc::new(PendingConnectRegistry::default());
+        let (mut rx1, _g1) = reg.register("k1".into()).unwrap();
+        let (mut rx2, _g2) = reg.register("k2".into()).unwrap();
+        reg.cancel_all();
+        assert_eq!(rx1.try_recv(), Ok(()));
+        assert_eq!(rx2.try_recv(), Ok(()));
+        assert!(reg.inner.lock().unwrap().active.is_empty());
     }
 }

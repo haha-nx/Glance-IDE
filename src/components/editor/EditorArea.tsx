@@ -4,6 +4,7 @@ import { open as pickDialog } from "@tauri-apps/plugin-dialog";
 import { tabsStore } from "../../stores/tabs";
 import { tabDragStore, type DropZone } from "../../stores/tabDrag";
 import { explorerStore } from "../../stores/explorer";
+import { sshReconnectStore } from "../../stores/sshReconnect";
 import { getModel } from "../../lib/models";
 import { TabBar } from "./TabBar";
 import { MonacoHost } from "./MonacoHost";
@@ -41,6 +42,7 @@ export function EditorArea() {
     };
     void curWin
       .listen("menu:open-folder", async () => {
+        sshReconnectStore.getState().cancelForLocalOpen();
         const picked = await pickDialog({ directory: true, multiple: false });
         if (typeof picked === "string" && picked) {
           await explorerStore.getState().openRoot(picked);
@@ -50,9 +52,16 @@ export function EditorArea() {
       .then(bind);
     void curWin
       .listen("menu:open-file", async () => {
+        sshReconnectStore.getState().cancelForLocalOpen();
         const picked = await pickDialog({ multiple: false });
         if (typeof picked === "string" && picked) {
           await tabsStore.getState().openFileByPath(picked);
+          if (
+            sshReconnectStore.getState().consumeCancelledPendingRemote() &&
+            explorerStore.getState().rootPath?.startsWith("remote://")
+          ) {
+            explorerStore.getState().closeRoot();
+          }
         }
       })
       .then(bind);

@@ -9,7 +9,7 @@ interface ProfileDialogProps {
   prefill?: { host: string; port: number } | null;
   busy: boolean;
   onCancel: () => void;
-  onSubmit: (input: ProfileInput) => void;
+  onSubmit: (input: ProfileInput, options?: { connectAfterSave?: boolean }) => void;
 }
 
 const AUTH_OPTIONS: { value: AuthMethod; label: string }[] = [
@@ -31,12 +31,13 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
   const keyPassRef = useRef<HTMLInputElement>(null);
   const authRef = useRef<AuthMethod>(existing?.authMethod ?? "password");
   const [authMethod, setAuthMethod] = useState<AuthMethod>(existing?.authMethod ?? "password");
+  const [submitMode, setSubmitMode] = useState<"save" | "saveAndConnect">("save");
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const initialHost = existing?.host ?? prefill?.host ?? "";
   const initialPort = existing?.port ?? prefill?.port ?? 22;
 
-  function submit() {
+  function submit(connectAfterSave = false) {
     setValidationError(null);
     const rawName = nameRef.current?.value.trim() ?? "";
     const host = hostRef.current?.value.trim() ?? "";
@@ -59,17 +60,21 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
       setValidationError("公钥认证需要提供私钥文件路径");
       return;
     }
-    onSubmit({
-      name,
-      host,
-      port,
-      username,
-      authMethod,
-      password: password || undefined,
-      keyPath: keyPath || undefined,
-      keyPassphrase: keyPass || undefined,
-      identityMode: "device_pool", // 首版统一设备池模式：single 也由 0..n 身份表达
-    });
+    setSubmitMode(connectAfterSave ? "saveAndConnect" : "save");
+    onSubmit(
+      {
+        name,
+        host,
+        port,
+        username,
+        authMethod,
+        password: password || undefined,
+        keyPath: keyPath || undefined,
+        keyPassphrase: keyPass || undefined,
+        identityMode: "device_pool", // 首版统一设备池模式：single 也由 0..n 身份表达
+      },
+      { connectAfterSave },
+    );
   }
 
   const inputClass =
@@ -79,13 +84,26 @@ export function ProfileDialog({ existing, prefill, busy, onCancel, onSubmit }: P
   return (
     <Modal
       title={existing ? "编辑连接配置" : "新建连接配置"}
-      onClose={onCancel}
+      onClose={() => !busy && onCancel()}
       footer={
         <>
-          <Button onClick={onCancel}>取消</Button>
-          <PrimaryButton onClick={submit} disabled={busy}>
-            {busy ? "保存中…" : "保存"}
-          </PrimaryButton>
+          <Button onClick={onCancel} disabled={busy}>
+            取消
+          </Button>
+          {existing ? (
+            <PrimaryButton onClick={() => submit(false)} disabled={busy}>
+              {busy ? "保存中…" : "保存"}
+            </PrimaryButton>
+          ) : (
+            <>
+              <Button onClick={() => submit(false)} disabled={busy}>
+                {busy && submitMode === "save" ? "保存中…" : "保存"}
+              </Button>
+              <PrimaryButton onClick={() => submit(true)} disabled={busy}>
+                {busy && submitMode === "saveAndConnect" ? "保存并连接中…" : "保存并连接"}
+              </PrimaryButton>
+            </>
+          )}
         </>
       }
       width={440}

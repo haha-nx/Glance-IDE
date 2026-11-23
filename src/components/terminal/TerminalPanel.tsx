@@ -13,7 +13,12 @@ import { tabsStore } from "../../stores/tabs";
 import { explorerStore } from "../../stores/explorer";
 import { settingsStore } from "../../stores/settings";
 import { parseProblems, resolveProblemPath, type Problem } from "../../lib/problems";
-import { isPrimaryWindow } from "../../lib/windowState";
+import {
+  clearPendingSshTerminal,
+  isPrimaryWindow,
+  peekPendingSshTerminal,
+  type PendingSshTerminal,
+} from "../../lib/windowState";
 import { IS_MAC } from "../../lib/platform";
 import type { SessionDto } from "../../types/ssh";
 import type { WslDistroDto } from "../../types/wsl";
@@ -68,6 +73,10 @@ export function TerminalPanel({
   onTerminalCountChangeRef.current = onTerminalCountChange;
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+  const activePaneIdRef = useRef(activePaneId);
+  activePaneIdRef.current = activePaneId;
+  const panesRef = useRef(panes);
+  panesRef.current = panes;
   const fontSize = settingsStore((s) => s.fontSize);
   const theme = settingsStore((s) => s.theme);
 
@@ -93,6 +102,7 @@ export function TerminalPanel({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      openingAutoRef.current = false;
       dragCleanupRef.current?.();
       if (syncTimerRef.current) {
         clearTimeout(syncTimerRef.current);
@@ -324,8 +334,92 @@ export function TerminalPanel({
   const createDeviceTerminalRef = useRef(createTerminalForCurrentDevice);
   createDeviceTerminalRef.current = createTerminalForCurrentDevice;
 
+  const ensureSshTerminalForSession = useCallback(
+    async (req: PendingSshTerminal) => {
+      if (!mountedRef.current) return;
+
+      const existing = [...termsMapRef.current.values()].find(
+        (t) => t.type === "ssh" && t.deviceIdentityId === req.deviceIdentityId,
+      );
+      if (existing) {
+        clearPendingSshTerminal(req.sessionId);
+        setTab("terminal");
+        const ownerPane = panesRef.current.find((p) => p.tabIds.includes(existing.id));
+        if (ownerPane) {
+          setActivePaneId(ownerPane.id);
+          setPanes((prev) =>
+            prev.map((p) => (p.id === ownerPane.id ? { ...p, activeId: existing.id } : p)),
+          );
+        }
+        requestAnimationFrame(() => {
+          if (!mountedRef.current) return;
+          try {
+            existing.fit.fit();
+            void terminalApi.resize(existing.channelId, existing.term.cols, existing.term.rows);
+          } catch {}
+          existing.term.focus();
+        });
+        return;
+      }
+
+      if (openingAutoRef.current) return;
+      initialSshWaitDoneRef.current = true;
+      openingAutoRef.current = true;
+
+      try {
+        const liveSessions = await sshApi.listSessions().catch(() => []);
+        if (!mountedRef.current) return;
+        setSessions(liveSessions);
+
+        const session =
+          liveSessions.find((s) => s.sessionId === req.sessionId) ??
+          liveSessions.find((s) => s.deviceIdentityId === req.deviceIdentityId);
+        if (!session) {
+          clearPendingSshTerminal(req.sessionId);
+          return;
+        }
+
+        let targetPaneId = activePaneIdRef.current;
+        if (termsMapRef.current.size === 1) {
+          const firstTerm = [...termsMapRef.current.values()][0];
+          if (firstTerm && firstTerm.type === "local" && !firstTerm.hasInput) {
+            void terminalApi.close(firstTerm.channelId).catch(() => {});
+            firstTerm.term.dispose();
+            firstTerm.container.remove();
+            termsMapRef.current.delete(firstTerm.id);
+            setPanes([{ id: "pane-0", tabIds: [], activeId: null }]);
+            setTerms([]);
+            onTerminalCountChangeRef.current?.(0);
+            targetPaneId = "pane-0";
+            setActivePaneId("pane-0");
+          }
+        }
+
+        setTab("terminal");
+        await openSshTerminal(session, targetPaneId);
+        if (mountedRef.current) {
+          clearPendingSshTerminal(req.sessionId);
+        }
+      } finally {
+        openingAutoRef.current = false;
+      }
+    },
+    [openSshTerminal],
+  );
+
+  const ensureSshTerminalRef = useRef(ensureSshTerminalForSession);
+  ensureSshTerminalRef.current = ensureSshTerminalForSession;
+
   useEffect(() => {
-    if (!visible || tab !== "terminal") return;
+    if (!visible) return;
+
+    const pending = peekPendingSshTerminal();
+    if (pending) {
+      void ensureSshTerminalRef.current(pending);
+      return;
+    }
+
+    if (tab !== "terminal") return;
 
     if (termsMapRef.current.size > 0) {
       requestAnimationFrame(() => {
@@ -371,10 +465,20 @@ export function TerminalPanel({
 
   // 监听 SSH 连接与断开事件，动态同步最新会话池
   useEffect(() => {
-    const handleConnected = async () => {
+    const handleConnected = async (e: Event) => {
+      const detail = (
+        e as CustomEvent<{
+          deviceIdentityId?: string;
+          sessionId?: string;
+          initiatedHere?: boolean;
+        }>
+      ).detail;
       try {
         const list = await sshApi.listSessions();
         setSessions(list);
+        if (detail?.initiatedHere && settingsStore.getState().autoOpenTerminalOnSsh) {
+          return;
+        }
         if (termsMapRef.current.size === 0) {
           if (visibleRef.current && !openingAutoRef.current) {
             openingAutoRef.current = true;
@@ -382,7 +486,7 @@ export function TerminalPanel({
               openingAutoRef.current = false;
             });
           }
-        } else if (termsMapRef.current.size === 1) {
+        } else if (termsMapRef.current.size === 1 && !openingAutoRef.current) {
           const firstTerm = [...termsMapRef.current.values()][0];
           if (firstTerm && firstTerm.type === "local" && !firstTerm.hasInput) {
             // 将启动初期未交互的临时本机终端平滑替换为 SSH 远程终端
@@ -466,6 +570,18 @@ export function TerminalPanel({
     window.addEventListener("glance:new-terminal", handleNew);
     return () => window.removeEventListener("glance:new-terminal", handleNew);
   }, [activePaneId, createTerminalForCurrentDevice]);
+
+  // 响应「SSH 连接成功自动打开终端」事件（TerminalPanel 已挂载时立即打开）
+  useEffect(() => {
+    const handleOpenSsh = (e: Event) => {
+      const detail = (e as CustomEvent<PendingSshTerminal>).detail;
+      if (detail?.sessionId && detail?.deviceIdentityId) {
+        void ensureSshTerminalForSession(detail);
+      }
+    };
+    window.addEventListener("glance:open-ssh-terminal", handleOpenSsh);
+    return () => window.removeEventListener("glance:open-ssh-terminal", handleOpenSsh);
+  }, [ensureSshTerminalForSession]);
 
   // 窗格分屏：在指定窗格左侧或右侧创建新窗格，并放入指定终端（或新建终端）
   const splitPaneAt = (

@@ -61,11 +61,22 @@ export const sshApi = {
     }
   },
 
-  async connectProfile(profileId: string): Promise<ConnectOutcome> {
+  async connectProfile(profileId: string, attemptId?: string): Promise<ConnectOutcome> {
     try {
-      return await invoke<ConnectOutcome>("connect_profile", { profileId });
+      return await invoke<ConnectOutcome>("connect_profile", {
+        profileId,
+        attemptId: attemptId ?? null,
+      });
     } catch (err) {
       throw wrapCmdError(err);
+    }
+  },
+
+  async cancelConnect(attemptId: string): Promise<boolean> {
+    try {
+      return await invoke<boolean>("cancel_ssh_connect", { attemptId });
+    } catch {
+      return false;
     }
   },
 

@@ -54,11 +54,15 @@ export const APP_THEMES: ThemeMeta[] = [
 
 export interface AppSettings {
   fontSize: number;
+  /** 资源管理器文字与图标缩放百分比（80–200，默认 100） */
+  explorerFontScale: number;
   theme: AppTheme;
   /** 是否在代码编辑器中显示语法 / LSP 报错与诊断波浪线（默认关闭） */
   showEditorDiagnostics: boolean;
   /** 是否在打开新文件时优先替换未修改标签，仅保留已修改文件（默认关闭） */
   keepOnlyModifiedTabs: boolean;
+  /** SSH 连接成功后是否自动打开终端面板（默认关闭） */
+  autoOpenTerminalOnSsh: boolean;
   /** 是否在启动时自动检测更新（默认关闭） */
   autoCheckUpdate: boolean;
   /** 检测到新版本时是否自动下载安装包（默认关闭） */
@@ -72,9 +76,11 @@ const DB_SETTINGS_KEY = "settings.preferences.v1";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 13,
+  explorerFontScale: 100,
   theme: "dark",
   showEditorDiagnostics: false,
   keepOnlyModifiedTabs: false,
+  autoOpenTerminalOnSsh: false,
   autoCheckUpdate: false,
   autoDownloadUpdate: false,
   sidebarWidth: 288,
@@ -84,6 +90,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export function clampFontSize(val: number): number {
   if (!Number.isFinite(val)) return DEFAULT_SETTINGS.fontSize;
   return Math.max(10, Math.min(24, Math.round(val)));
+}
+
+export function clampExplorerFontScale(val: number): number {
+  if (!Number.isFinite(val)) return DEFAULT_SETTINGS.explorerFontScale;
+  return Math.max(80, Math.min(200, Math.round(val)));
 }
 
 export function clampSidebarWidth(val: number): number {
@@ -101,12 +112,18 @@ function normalizeSettings(raw: Partial<AppSettings> | null | undefined): AppSet
   const theme = raw?.theme && validThemes.includes(raw.theme) ? raw.theme : DEFAULT_SETTINGS.theme;
   return {
     fontSize: clampFontSize(raw?.fontSize ?? DEFAULT_SETTINGS.fontSize),
+    explorerFontScale: clampExplorerFontScale(
+      raw?.explorerFontScale ?? DEFAULT_SETTINGS.explorerFontScale,
+    ),
     theme,
     showEditorDiagnostics: Boolean(
       raw?.showEditorDiagnostics ?? DEFAULT_SETTINGS.showEditorDiagnostics,
     ),
     keepOnlyModifiedTabs: Boolean(
       raw?.keepOnlyModifiedTabs ?? DEFAULT_SETTINGS.keepOnlyModifiedTabs,
+    ),
+    autoOpenTerminalOnSsh: Boolean(
+      raw?.autoOpenTerminalOnSsh ?? DEFAULT_SETTINGS.autoOpenTerminalOnSsh,
     ),
     autoCheckUpdate: Boolean(raw?.autoCheckUpdate ?? DEFAULT_SETTINGS.autoCheckUpdate),
     autoDownloadUpdate: Boolean(raw?.autoDownloadUpdate ?? DEFAULT_SETTINGS.autoDownloadUpdate),
@@ -131,6 +148,10 @@ export function applyDomSettings(settings: AppSettings): void {
   if (typeof document === "undefined") return;
   document.documentElement.setAttribute("data-theme", settings.theme);
   document.documentElement.style.setProperty("--glance-font-size", `${settings.fontSize}px`);
+  document.documentElement.style.setProperty(
+    "--glance-explorer-scale",
+    String(settings.explorerFontScale / 100),
+  );
   // 同步 macOS 原生标题栏外观：红绿灯按钮底色跟随窗口 theme，
   // 否则深色界面里会留下浅色底块，浅色主题下又反过来。
   if (typeof navigator !== "undefined" && /Mac OS X|Macintosh/.test(navigator.userAgent)) {
@@ -178,9 +199,11 @@ export const settingsStore = create<SettingsState>()((set, get) => ({
     const cur = get();
     const next = normalizeSettings({
       fontSize: patch.fontSize ?? cur.fontSize,
+      explorerFontScale: patch.explorerFontScale ?? cur.explorerFontScale,
       theme: patch.theme ?? cur.theme,
       showEditorDiagnostics: patch.showEditorDiagnostics ?? cur.showEditorDiagnostics,
       keepOnlyModifiedTabs: patch.keepOnlyModifiedTabs ?? cur.keepOnlyModifiedTabs,
+      autoOpenTerminalOnSsh: patch.autoOpenTerminalOnSsh ?? cur.autoOpenTerminalOnSsh,
       autoCheckUpdate: patch.autoCheckUpdate ?? cur.autoCheckUpdate,
       autoDownloadUpdate: patch.autoDownloadUpdate ?? cur.autoDownloadUpdate,
       sidebarWidth: patch.sidebarWidth ?? cur.sidebarWidth,
@@ -205,6 +228,7 @@ export const settingsStore = create<SettingsState>()((set, get) => ({
   resetAppearance: () => {
     get().updateSettings({
       fontSize: DEFAULT_SETTINGS.fontSize,
+      explorerFontScale: DEFAULT_SETTINGS.explorerFontScale,
       theme: DEFAULT_SETTINGS.theme,
       sidebarWidth: DEFAULT_SETTINGS.sidebarWidth,
       bottomPanelHeight: DEFAULT_SETTINGS.bottomPanelHeight,
@@ -216,9 +240,11 @@ export const settingsStore = create<SettingsState>()((set, get) => ({
       const s = get();
       return {
         fontSize: s.fontSize,
+        explorerFontScale: s.explorerFontScale,
         theme: s.theme,
         showEditorDiagnostics: s.showEditorDiagnostics,
         keepOnlyModifiedTabs: s.keepOnlyModifiedTabs,
+        autoOpenTerminalOnSsh: s.autoOpenTerminalOnSsh,
         autoCheckUpdate: s.autoCheckUpdate,
         autoDownloadUpdate: s.autoDownloadUpdate,
         sidebarWidth: s.sidebarWidth,
@@ -262,9 +288,11 @@ if (typeof window !== "undefined") {
         const cur = settingsStore.getState();
         const synced: AppSettings = {
           fontSize: incoming.fontSize,
+          explorerFontScale: incoming.explorerFontScale,
           theme: incoming.theme,
           showEditorDiagnostics: incoming.showEditorDiagnostics,
           keepOnlyModifiedTabs: incoming.keepOnlyModifiedTabs,
+          autoOpenTerminalOnSsh: incoming.autoOpenTerminalOnSsh,
           autoCheckUpdate: incoming.autoCheckUpdate,
           autoDownloadUpdate: incoming.autoDownloadUpdate,
           sidebarWidth: cur.sidebarWidth,

@@ -3,6 +3,7 @@ import type { FileEntryDto } from "../types/ipc";
 import { filesApi } from "../services/files";
 import { workspaceApi } from "../services/workspace";
 import { isPrimaryWindow } from "../lib/windowState";
+import { sshReconnectStore } from "./sshReconnect";
 
 /**
  * 文件树状态：childrenMap 缓存目录列表，按需懒加载。
@@ -57,7 +58,7 @@ interface ExplorerState {
   selectedPath: string | null;
   loadingDirs: Record<string, boolean>;
 
-  openRoot(path: string): Promise<void>;
+  openRoot(path: string, opts?: { isRestore?: boolean }): Promise<void>;
   closeRoot(): void;
   ensureLoaded(path: string): Promise<void>;
   toggleDir(path: string): Promise<void>;
@@ -78,7 +79,13 @@ export const explorerStore = create<ExplorerState>()((set, get) => ({
   selectedPath: null,
   loadingDirs: {},
 
-  openRoot: async (path) => {
+  openRoot: async (path, opts) => {
+    if (path.startsWith("remote://")) {
+      sshReconnectStore.getState().clearCancelledPendingRemote();
+    } else if (!opts?.isRestore) {
+      sshReconnectStore.getState().cancelForLocalOpen();
+      sshReconnectStore.getState().consumeCancelledPendingRemote();
+    }
     workspaceGen += 1;
     if (isPrimaryWindow()) {
       localStorage.setItem(ROOT_KEY, path);
@@ -98,6 +105,10 @@ export const explorerStore = create<ExplorerState>()((set, get) => ({
   },
 
   closeRoot: () => {
+    if (sshReconnectStore.getState().reconnecting) {
+      sshReconnectStore.getState().cancelForLocalOpen();
+    }
+    sshReconnectStore.getState().clearCancelledPendingRemote();
     workspaceGen += 1;
     if (isPrimaryWindow()) {
       localStorage.removeItem(ROOT_KEY);

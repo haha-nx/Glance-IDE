@@ -129,7 +129,11 @@ export function RemotePanel() {
           localStorage.setItem("glance.lastSshProfileId", profile.id);
           window.dispatchEvent(
             new CustomEvent("glance:session-connected", {
-              detail: { deviceIdentityId: outcome.deviceIdentityId, sessionId: outcome.sessionId },
+              detail: {
+                deviceIdentityId: outcome.deviceIdentityId,
+                sessionId: outcome.sessionId,
+                initiatedHere: true,
+              },
             }),
           );
           const home = await sshApi.remoteHome(outcome.sessionId);
@@ -188,13 +192,17 @@ export function RemotePanel() {
     }
   }
 
-  async function submitProfile(input: ProfileInput) {
+  async function submitProfile(
+    input: ProfileInput,
+    options?: { connectAfterSave?: boolean },
+  ) {
     setBusy(true);
+    let created: ConnectionProfileDto | null = null;
     try {
       if (dialog?.kind === "edit") {
         await sshApi.updateProfile(dialog.profile.id, input);
       } else {
-        await sshApi.createProfile(input);
+        created = await sshApi.createProfile(input);
       }
       setDialog(null);
       await refreshSsh();
@@ -202,6 +210,9 @@ export function RemotePanel() {
       showErrorToast(err instanceof CmdError ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+    if (options?.connectAfterSave && created) {
+      await connectCurrentWindow(created);
     }
   }
 

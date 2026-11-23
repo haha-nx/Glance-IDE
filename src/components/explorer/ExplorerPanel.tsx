@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { explorerStore, joinChildPath } from "../../stores/explorer";
+import { settingsStore } from "../../stores/settings";
+import { sshReconnectStore } from "../../stores/sshReconnect";
 import { tabsStore } from "../../stores/tabs";
 import { transferStore } from "../../stores/transfer";
 import { filesApi } from "../../services/files";
@@ -37,6 +39,7 @@ export function ExplorerPanel() {
   const rootError = explorerStore((s) => s.rootError);
   const openRoot = explorerStore((s) => s.openRoot);
   const closeRoot = explorerStore((s) => s.closeRoot);
+  const explorerFontScale = settingsStore((s) => s.explorerFontScale);
   const pendingConflict = transferStore((s) => s.pendingConflict);
   const resolveConflict = transferStore((s) => s.resolveConflict);
 
@@ -117,6 +120,7 @@ export function ExplorerPanel() {
     rootPath?.replace(/[\\/]+$/, "").split(/[/\\]/).filter(Boolean).pop() ?? "";
 
   async function pickFolder() {
+    sshReconnectStore.getState().cancelForLocalOpen();
     const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string" && selected.length > 0) {
@@ -277,7 +281,8 @@ export function ExplorerPanel() {
         <>
           <div className="flex items-center justify-between px-3 py-1">
             <span
-              className="min-w-0 flex-1 truncate whitespace-nowrap text-xs font-semibold uppercase tracking-wider text-zinc-300"
+              className="min-w-0 flex-1 truncate whitespace-nowrap font-semibold uppercase tracking-wider text-zinc-200"
+              style={{ fontSize: `${Number((12.5 * (explorerFontScale / 100)).toFixed(1))}px` }}
               title={rootPath || "文件"}
             >
               {rootName || "文件"}

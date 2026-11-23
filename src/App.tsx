@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
@@ -34,6 +34,7 @@ const SettingsModal = lazy(() =>
 import { tabsStore } from "./stores/tabs";
 import { explorerStore } from "./stores/explorer";
 import { gitStore } from "./stores/git";
+import { sshReconnectStore } from "./stores/sshReconnect";
 import {
   clampBottomPanelHeight,
   clampSidebarWidth,
@@ -45,7 +46,7 @@ import { workspaceApi } from "./services/workspace";
 import { appApi } from "./services/files";
 import { sshApi } from "./services/ssh";
 import { CmdError, type ConnectionProfileDto } from "./types/ssh";
-import { isPrimaryWindow } from "./lib/windowState";
+import { isPrimaryWindow, setPendingSshTerminal } from "./lib/windowState";
 import {
   AppOverlays,
   type SshLostState,
@@ -70,6 +71,7 @@ export function App() {
   const sidebarWidth = settingsStore((s) => s.sidebarWidth);
   const bottomPanelHeight = settingsStore((s) => s.bottomPanelHeight);
   const [pendingUpdatePath, setPendingUpdatePath] = useState<string | null>(null);
+  const startupParamsHandledRef = useRef(false);
 
   const handleSshReconnectFailed = useCallback(
     (profile: ConnectionProfileDto, reason: string) => {
@@ -334,24 +336,61 @@ export function App() {
 
   // 监听新窗口自连与直开目录参数（?open_folder=... / ?connect_ssh=... / ?connect_wsl=...）
   useEffect(() => {
+    if (startupParamsHandledRef.current) return;
+    startupParamsHandledRef.current = true;
+
     const params = new URLSearchParams(window.location.search);
     const openFolder = params.get("open_folder");
     const connectSsh = params.get("connect_ssh");
     const connectWsl = params.get("connect_wsl");
     if (openFolder) {
-      void explorerStore.getState().openRoot(openFolder);
+      void explorerStore.getState().openRoot(openFolder, { isRestore: true });
       setActivePanel("explorer");
     } else if (connectSsh) {
+      const attempt = sshReconnectStore.getState().beginStartup();
+      if (!attempt) return;
       void (async () => {
         try {
-          const outcome = await sshApi.connectProfile(connectSsh);
+          const outcome = await sshApi.connectProfile(connectSsh, attempt.attemptId);
+          if (
+            !sshReconnectStore.getState().isActive(attempt.generation) ||
+            outcome.status === "cancelled"
+          ) {
+            if (outcome.status === "connected") {
+              void sshApi.disconnectSession(outcome.sessionId).catch(() => {});
+            }
+            return;
+          }
           if (outcome.status === "connected") {
             const home = await sshApi.remoteHome(outcome.sessionId);
-            await explorerStore.getState().openRoot(`remote://${outcome.deviceIdentityId}${home}`);
-            setActivePanel("explorer");
+            if (!sshReconnectStore.getState().isActive(attempt.generation)) {
+              void sshApi.disconnectSession(outcome.sessionId).catch(() => {});
+              return;
+            }
+            sshReconnectStore.getState().finish(attempt.generation);
+            window.dispatchEvent(
+              new CustomEvent("glance:session-connected", {
+                detail: {
+                  deviceIdentityId: outcome.deviceIdentityId,
+                  sessionId: outcome.sessionId,
+                  initiatedHere: true,
+                },
+              }),
+            );
+            const cleanHome = home.startsWith("/") ? home : `/${home}`;
+            await explorerStore
+              .getState()
+              .openRoot(`remote://${outcome.deviceIdentityId}${cleanHome}`, { isRestore: true });
+            if (!sshReconnectStore.getState().startupCancelled) {
+              setActivePanel("explorer");
+            }
           }
         } catch (e) {
-          console.error("新窗口 SSH 连接失败:", e);
+          if (sshReconnectStore.getState().isActive(attempt.generation)) {
+            console.error("新窗口 SSH 连接失败:", e);
+          }
+        } finally {
+          sshReconnectStore.getState().finish(attempt.generation);
         }
       })();
     } else if (connectWsl) {
@@ -359,13 +398,57 @@ export function App() {
         try {
           const { wslApi } = await import("./services/wsl");
           const home = await wslApi.getHome(connectWsl);
-          await explorerStore.getState().openRoot(`wsl://${connectWsl}${home}`);
-          setActivePanel("explorer");
+          if (sshReconnectStore.getState().startupCancelled) return;
+          await explorerStore
+            .getState()
+            .openRoot(`wsl://${connectWsl}${home}`, { isRestore: true });
+          if (!sshReconnectStore.getState().startupCancelled) {
+            setActivePanel("explorer");
+          }
         } catch (e) {
           console.error("新窗口 WSL 连接失败:", e);
         }
       })();
     }
+  }, []);
+
+  // 当打开本地文件/文件夹取消 SSH 重连时，立即关闭可能已挂起或残留的连接失败弹窗
+  useEffect(() => {
+    const onCancelled = () => setSshReconnectFail(null);
+    window.addEventListener("glance:ssh-reconnect-cancelled", onCancelled);
+    return () => window.removeEventListener("glance:ssh-reconnect-cancelled", onCancelled);
+  }, []);
+
+  // 若开启「SSH 连接成功自动打开终端」，在本窗口发起的 SSH 会话建立后自动展开底部终端
+  useEffect(() => {
+    const onSessionConnected = (e: Event) => {
+      const detail = (
+        e as CustomEvent<{
+          deviceIdentityId?: string;
+          sessionId?: string;
+          initiatedHere?: boolean;
+        }>
+      ).detail;
+      if (!detail?.initiatedHere || !detail.sessionId || !detail.deviceIdentityId) return;
+      if (!settingsStore.getState().autoOpenTerminalOnSsh) return;
+
+      setPendingSshTerminal({
+        sessionId: detail.sessionId,
+        deviceIdentityId: detail.deviceIdentityId,
+      });
+      setTerminalMounted(true);
+      setBottomPanelOpen(true);
+      window.dispatchEvent(
+        new CustomEvent("glance:open-ssh-terminal", {
+          detail: {
+            sessionId: detail.sessionId,
+            deviceIdentityId: detail.deviceIdentityId,
+          },
+        }),
+      );
+    };
+    window.addEventListener("glance:session-connected", onSessionConnected);
+    return () => window.removeEventListener("glance:session-connected", onSessionConnected);
   }, []);
 
   // 监听自定义请求关闭事件
@@ -442,20 +525,40 @@ export function App() {
 
   // 重试连接 SSH 流程
   const handleRetrySsh = async (profile: ConnectionProfileDto) => {
+    const attempt = sshReconnectStore.getState().beginManual();
     try {
-      const outcome = await sshApi.connectProfile(profile.id);
+      const outcome = await sshApi.connectProfile(profile.id, attempt.attemptId);
+      if (
+        !sshReconnectStore.getState().isActive(attempt.generation) ||
+        outcome.status === "cancelled"
+      ) {
+        if (outcome.status === "connected") {
+          void sshApi.disconnectSession(outcome.sessionId).catch(() => {});
+        }
+        return;
+      }
       if (outcome.status === "connected") {
+        const home = await sshApi.remoteHome(outcome.sessionId);
+        if (!sshReconnectStore.getState().isActive(attempt.generation)) {
+          void sshApi.disconnectSession(outcome.sessionId).catch(() => {});
+          return;
+        }
+        sshReconnectStore.getState().finish(attempt.generation);
         setSshReconnectFail(null);
         window.dispatchEvent(
           new CustomEvent("glance:session-connected", {
-            detail: { deviceIdentityId: outcome.deviceIdentityId, sessionId: outcome.sessionId },
+            detail: {
+              deviceIdentityId: outcome.deviceIdentityId,
+              sessionId: outcome.sessionId,
+              initiatedHere: true,
+            },
           }),
         );
-        const home = await sshApi.remoteHome(outcome.sessionId);
         const cleanHome = home.startsWith("/") ? home : `/${home}`;
         await explorerStore.getState().openRoot(`remote://${outcome.deviceIdentityId}${cleanHome}`);
         setActivePanel("explorer");
       } else {
+        sshReconnectStore.getState().finish(attempt.generation);
         const reason =
           outcome.status === "networkError" || outcome.status === "authFailed"
             ? outcome.message
@@ -465,8 +568,13 @@ export function App() {
         setSshReconnectFail({ profile, reason });
       }
     } catch (err) {
+      if (!sshReconnectStore.getState().isActive(attempt.generation)) {
+        return;
+      }
       const reason = err instanceof CmdError ? err.message : String(err);
       setSshReconnectFail({ profile, reason });
+    } finally {
+      sshReconnectStore.getState().finish(attempt.generation);
     }
   };
 
