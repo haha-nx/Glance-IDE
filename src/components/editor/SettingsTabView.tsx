@@ -60,7 +60,7 @@ function ToggleSwitch({
 export function SettingsTabView() {
   const section = tabsStore((s) => s.settingsSection);
   const setSection = tabsStore((s) => s.setSettingsSection);
-  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.8" });
+  const [appInfo, setAppInfo] = useState({ name: "Glance IDE", version: "0.1.9" });
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const fontSize = settingsStore((s) => s.fontSize);

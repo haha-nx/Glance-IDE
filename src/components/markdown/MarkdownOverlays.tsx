@@ -123,7 +123,7 @@ export function MarkdownContextMenu({
     <div
       id="md-wysiwyg-context-menu"
       style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
-      className="fixed z-[9999] w-52 rounded-lg border border-zinc-700/80 bg-zinc-950/98 py-1.5 text-xs text-zinc-200 shadow-2xl backdrop-blur-md select-none"
+      className="glance-menu fixed z-[9999] w-52 py-1.5 backdrop-blur-md"
       onMouseDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
@@ -134,31 +134,31 @@ export function MarkdownContextMenu({
     >
       {/* 段落子菜单 */}
       <div
-        className="relative px-3 py-1.5 flex items-center justify-between hover:bg-zinc-800/80 cursor-pointer rounded-sm"
+        className="glance-menu-item relative"
         onMouseEnter={() => onHoverSubmenu("heading")}
       >
         <span>段落格式</span>
-        <span className="text-zinc-500 text-[10px]">▸</span>
+        <span className="glance-menu-item-muted">▸</span>
 
         {hoverSubmenu === "heading" && (
-          <div className="absolute left-full top-0 ml-1 w-36 rounded-lg border border-zinc-700/80 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur-md">
+          <div className="glance-menu absolute left-full top-0 ml-1 w-36 backdrop-blur-md">
             {[1, 2, 3, 4].map((lvl) => (
               <button
                 key={lvl}
                 onClick={() => onInsertHeading(lvl)}
-                className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
+                className="glance-menu-item"
               >
                 <span>{["一级标题", "二级标题", "三级标题", "四级标题"][lvl - 1]}</span>
-                <span className="text-zinc-500 text-[10px]">H{lvl}</span>
+                <span className="glance-menu-shortcut">H{lvl}</span>
               </button>
             ))}
-            <div className="my-1 border-t border-zinc-800" />
+            <div className="glance-menu-sep" />
             <button
               onClick={() => onInsertHeading(0)}
-              className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
+              className="glance-menu-item"
             >
               <span>普通段落</span>
-              <span className="text-zinc-500 text-[10px]">P</span>
+              <span className="glance-menu-shortcut">P</span>
             </button>
           </div>
         )}
@@ -166,45 +166,45 @@ export function MarkdownContextMenu({
 
       {/* 字体格式子菜单 */}
       <div
-        className="relative px-3 py-1.5 flex items-center justify-between hover:bg-zinc-800/80 cursor-pointer rounded-sm"
+        className="glance-menu-item relative"
         onMouseEnter={() => onHoverSubmenu("format")}
       >
         <span>字体样式</span>
-        <span className="text-zinc-500 text-[10px]">▸</span>
+        <span className="glance-menu-item-muted">▸</span>
 
         {hoverSubmenu === "format" && (
-          <div className="absolute left-full top-0 ml-1 w-36 rounded-lg border border-zinc-700/80 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur-md">
+          <div className="glance-menu absolute left-full top-0 ml-1 w-36 backdrop-blur-md">
             <button
               onClick={() => onExecFormat("bold")}
-              className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
+              className="glance-menu-item"
             >
               <span className="font-bold">加粗</span>
-              <span className="text-zinc-500 text-[10px]">Ctrl+B</span>
+              <span className="glance-menu-shortcut">Ctrl+B</span>
             </button>
             <button
               onClick={() => onExecFormat("italic")}
-              className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
+              className="glance-menu-item"
             >
               <span className="italic">斜体</span>
-              <span className="text-zinc-500 text-[10px]">Ctrl+I</span>
+              <span className="glance-menu-shortcut">Ctrl+I</span>
             </button>
             <button
               onClick={() => onExecFormat("strikeThrough")}
-              className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
+              className="glance-menu-item"
             >
               <span className="line-through">删除线</span>
             </button>
             <button
               onClick={onInsertInlineCode}
-              className="flex w-full items-center justify-between px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
+              className="glance-menu-item"
             >
-              <span className="font-mono text-sky-400">&lt;代码&gt;</span>
+              <span className="font-mono">&lt;代码&gt;</span>
             </button>
           </div>
         )}
       </div>
 
-      <div className="my-1 border-t border-zinc-800" />
+      <div className="glance-menu-sep" />
 
       {/* 插入元素 */}
       <button
@@ -213,85 +213,85 @@ export function MarkdownContextMenu({
           onOpenInsertTable();
         }}
         onMouseEnter={() => onHoverSubmenu(null)}
-        className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
+        className="glance-menu-item"
       >
         <span>插入表格…</span>
-        <span className="text-zinc-500 text-[10px]">Table</span>
+        <span className="glance-menu-shortcut">Table</span>
       </button>
 
       <button
         onClick={onInsertCodeBlock}
         onMouseEnter={() => onHoverSubmenu(null)}
-        className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
+        className="glance-menu-item"
       >
         <span>代码块</span>
-        <span className="text-zinc-500 text-[10px]">```</span>
+        <span className="glance-menu-shortcut">```</span>
       </button>
 
       <button
         onClick={onInsertBlockquote}
         onMouseEnter={() => onHoverSubmenu(null)}
-        className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
+        className="glance-menu-item"
       >
         <span>引用块</span>
-        <span className="text-zinc-500 text-[10px]">&gt;</span>
+        <span className="glance-menu-shortcut">&gt;</span>
       </button>
 
       <button
         onClick={onInsertUnorderedList}
         onMouseEnter={() => onHoverSubmenu(null)}
-        className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
+        className="glance-menu-item"
       >
         <span>无序列表</span>
-        <span className="text-zinc-500 text-[10px]">•</span>
+        <span className="glance-menu-shortcut">•</span>
       </button>
 
       <button
         onClick={onInsertOrderedList}
         onMouseEnter={() => onHoverSubmenu(null)}
-        className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
+        className="glance-menu-item"
       >
         <span>有序列表</span>
-        <span className="text-zinc-500 text-[10px]">1.</span>
+        <span className="glance-menu-shortcut">1.</span>
       </button>
 
       <button
         onClick={onInsertTaskItem}
         onMouseEnter={() => onHoverSubmenu(null)}
-        className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
+        className="glance-menu-item"
       >
         <span>待办清单</span>
-        <span className="text-zinc-500 text-[10px]">☑</span>
+        <span className="glance-menu-shortcut">☑</span>
       </button>
 
       <button
         onClick={onInsertHorizontalRule}
         onMouseEnter={() => onHoverSubmenu(null)}
-        className="flex w-full items-center justify-between px-3 py-1.5 text-left hover:bg-sky-600 hover:text-white"
+        className="glance-menu-item"
       >
         <span>分割线</span>
-        <span className="text-zinc-500 text-[10px]">---</span>
+        <span className="glance-menu-shortcut">---</span>
       </button>
 
       {/* 表格专属快捷操作 */}
       {contextMenu.inTable && (
         <>
-          <div className="my-1 border-t border-zinc-800" />
+          <div className="glance-menu-sep" />
           <div
-            className="relative px-3 py-1.5 flex items-center justify-between hover:bg-zinc-800/80 cursor-pointer rounded-sm text-sky-400"
+            className="glance-menu-item relative text-sky-400"
             onMouseEnter={() => onHoverSubmenu("table")}
           >
             <span>表格操作</span>
-            <span className="text-zinc-500 text-[10px]">▸</span>
+            <span className="glance-menu-item-muted">▸</span>
 
             {hoverSubmenu === "table" && (
-              <div className="absolute left-full top-0 ml-1 w-36 rounded-lg border border-zinc-700/80 bg-zinc-950/95 py-1 shadow-2xl backdrop-blur-md text-zinc-200">
+              <div className="glance-menu absolute left-full top-0 ml-1 w-36 backdrop-blur-md">
                 <button
                   onClick={() => {
                     onAddTableRow();
                     onClose();
                   }}
-                  className="flex w-full items-center px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
+                  className="glance-menu-item"
                 >
                   在下方插入行
                 </button>
@@ -300,7 +300,7 @@ export function MarkdownContextMenu({
                     onRemoveTableRow();
                     onClose();
                   }}
-                  className="flex w-full items-center px-3 py-1 text-left text-amber-400 hover:bg-sky-600 hover:text-white"
+                  className="glance-menu-item text-amber-400"
                 >
                   删除当前行
                 </button>
@@ -309,7 +309,7 @@ export function MarkdownContextMenu({
                     onAddTableCol();
                     onClose();
                   }}
-                  className="flex w-full items-center px-3 py-1 text-left hover:bg-sky-600 hover:text-white"
+                  className="glance-menu-item"
                 >
                   在右侧插入列
                 </button>
@@ -318,17 +318,17 @@ export function MarkdownContextMenu({
                     onRemoveTableCol();
                     onClose();
                   }}
-                  className="flex w-full items-center px-3 py-1 text-left text-amber-400 hover:bg-sky-600 hover:text-white"
+                  className="glance-menu-item text-amber-400"
                 >
                   删除当前列
                 </button>
-                <div className="my-1 border-t border-zinc-800" />
+                <div className="glance-menu-sep" />
                 <button
                   onClick={() => {
                     onDeleteEntireTable();
                     onClose();
                   }}
-                  className="flex w-full items-center px-3 py-1 text-left text-red-400 hover:bg-red-600 hover:text-white"
+                  className="glance-menu-item glance-menu-item-danger"
                 >
                   删除整个表格
                 </button>

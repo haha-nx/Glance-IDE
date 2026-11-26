@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { getModel } from "../../lib/models";
+import { contextMenuStore } from "../../stores/contextMenu";
 import { tabsStore } from "../../stores/tabs";
 import { domToMarkdown } from "../../lib/domToMarkdown";
 import {
@@ -266,6 +267,7 @@ export function MarkdownWysiwyg({ uri, headerRight }: MarkdownWysiwygProps) {
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    contextMenuStore.getState().close();
     saveSelection();
 
     const target = e.target as HTMLElement;

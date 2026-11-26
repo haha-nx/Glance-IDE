@@ -2,6 +2,8 @@ import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react"
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
+import { open as pickDialog } from "@tauri-apps/plugin-dialog";
+import { ContextMenuHost } from "./components/common/ContextMenuHost";
 import { TitleBar } from "./components/common/TitleBar";
 import { ToastHost } from "./components/common/ToastHost";
 import { TooltipLayer } from "./components/common/TooltipLayer";
@@ -519,6 +521,29 @@ export function App() {
     }
   };
 
+  const handleOpenFolder = async () => {
+    sshReconnectStore.getState().cancelForLocalOpen();
+    const picked = await pickDialog({ directory: true, multiple: false });
+    if (typeof picked === "string" && picked) {
+      await explorerStore.getState().openRoot(picked);
+      setActivePanel("explorer");
+    }
+  };
+
+  const handleOpenFile = async () => {
+    sshReconnectStore.getState().cancelForLocalOpen();
+    const picked = await pickDialog({ multiple: false });
+    if (typeof picked === "string" && picked) {
+      await tabsStore.getState().openFileByPath(picked);
+      if (
+        sshReconnectStore.getState().consumeCancelledPendingRemote() &&
+        explorerStore.getState().rootPath?.startsWith("remote://")
+      ) {
+        explorerStore.getState().closeRoot();
+      }
+    }
+  };
+
   // 重试连接 SSH 流程
   const handleRetrySsh = async (profile: ConnectionProfileDto) => {
     const attempt = sshReconnectStore.getState().beginManual();
@@ -623,6 +648,12 @@ export function App() {
     <div className="flex h-full flex-col bg-[var(--glance-bg)] overflow-hidden select-none">
       <TooltipLayer />
       <ToastHost />
+      <ContextMenuHost
+        onOpenFolder={() => void handleOpenFolder()}
+        onOpenFile={() => void handleOpenFile()}
+        onNewTerminal={handleNewTerminal}
+        onOpenSettings={() => openSettingsTab("appearance")}
+      />
       {/* 顶部单行自定义标题导航栏 */}
       <TitleBar
         onToggleTerminal={() => setBottomPanelOpen((v) => !v)}

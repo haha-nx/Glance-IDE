@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { contextMenuStore } from "../../stores/contextMenu";
 import { tabsStore } from "../../stores/tabs";
 import { tabDragStore, type TabDragState } from "../../stores/tabDrag";
 import { IconClose, IconSettings, IconWarning } from "../../components/common/icons";
@@ -193,6 +194,17 @@ export function TabBar({ groupId, actions }: TabBarProps) {
           ref={scrollRef}
           data-tabbar-group={groupId}
           onScroll={syncScrollThumb}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            contextMenuStore.getState().open(e.clientX, e.clientY, [
+              {
+                label: "关闭所有文件",
+                disabled: tabs.length === 0,
+                action: () => tabsStore.getState().closeAllTabsInGroup(groupId),
+              },
+            ]);
+          }}
           className={`flex h-full w-full items-stretch overflow-x-hidden overflow-y-hidden ${dropTarget ? "bg-sky-500/10" : ""}`}
         >
           {tabs.map((tab, i) => {
@@ -210,6 +222,26 @@ export function TabBar({ groupId, actions }: TabBarProps) {
                 onPointerDown={(e) => onTabPointerDown(e, tab.uri, groupId, tab.name)}
                 onAuxClick={(e) => {
                   if (e.button === 1) closeInGroup(groupId, tab.uri);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  contextMenuStore.getState().open(e.clientX, e.clientY, [
+                    {
+                      label: "关闭此文件",
+                      action: () => tabsStore.getState().closeInGroup(groupId, tab.uri),
+                    },
+                    {
+                      label: "关闭其他文件",
+                      disabled: tabs.length <= 1,
+                      action: () => tabsStore.getState().closeOtherTabsInGroup(groupId, tab.uri),
+                    },
+                    {
+                      label: "关闭所有文件",
+                      disabled: tabs.length === 0,
+                      action: () => tabsStore.getState().closeAllTabsInGroup(groupId),
+                    },
+                  ]);
                 }}
                 title={tab.settings ? "设置" : tab.path}
                 className={`group relative flex min-w-28 max-w-64 shrink-0 cursor-pointer items-center gap-1.5 border-r border-zinc-800 px-3 text-[13px] ${indicator} ${

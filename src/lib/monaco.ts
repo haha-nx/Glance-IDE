@@ -66,6 +66,12 @@ export function setupMonaco(): void {
       "editorGutter.background": "#18181b",
       "scrollbarSlider.background": "#3f3f4655",
       "scrollbarSlider.hoverBackground": "#52525b88",
+      "menu.background": "#232327",
+      "menu.foreground": "#e4e4e7",
+      "menu.selectionBackground": "#0284c7",
+      "menu.selectionForeground": "#ffffff",
+      "menu.separatorBackground": "#323238",
+      "menu.border": "#3f3f46",
     },
   });
 
@@ -81,6 +87,12 @@ export function setupMonaco(): void {
       "editorGutter.background": "#111827",
       "scrollbarSlider.background": "#33415555",
       "scrollbarSlider.hoverBackground": "#47556988",
+      "menu.background": "#1e293b",
+      "menu.foreground": "#e2e8f0",
+      "menu.selectionBackground": "#0284c7",
+      "menu.selectionForeground": "#ffffff",
+      "menu.separatorBackground": "#2c3a4f",
+      "menu.border": "#334155",
     },
   });
 
@@ -96,6 +108,12 @@ export function setupMonaco(): void {
       "editorGutter.background": "#2e3440",
       "scrollbarSlider.background": "#4c566a55",
       "scrollbarSlider.hoverBackground": "#616e8888",
+      "menu.background": "#3b4252",
+      "menu.foreground": "#e5e9f0",
+      "menu.selectionBackground": "#5e81ac",
+      "menu.selectionForeground": "#eceff4",
+      "menu.separatorBackground": "#434c5e",
+      "menu.border": "#4c566a",
     },
   });
 
@@ -111,6 +129,12 @@ export function setupMonaco(): void {
       "editorGutter.background": "#ffffff",
       "scrollbarSlider.background": "#cbd5e166",
       "scrollbarSlider.hoverBackground": "#94a3b899",
+      "menu.background": "#ffffff",
+      "menu.foreground": "#18181b",
+      "menu.selectionBackground": "#0284c7",
+      "menu.selectionForeground": "#ffffff",
+      "menu.separatorBackground": "#e2e8f0",
+      "menu.border": "#cbd5e1",
     },
   });
 

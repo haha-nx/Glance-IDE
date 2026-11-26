@@ -538,20 +538,20 @@ export function TitleBar({
                 </button>
 
                 {isOpen && (
-                  <div className="absolute left-0 top-full z-[9999] min-w-[240px] w-max rounded-md border border-zinc-700 bg-zinc-900 py-1 text-zinc-200 shadow-2xl backdrop-blur-md">
+                  <div className="glance-menu absolute left-0 top-full z-[9999] min-w-[240px] w-max backdrop-blur-md">
                     {menu.items.map((item, idx) => {
                       if (item.separator) {
-                        return <div key={idx} className="my-1 border-t border-zinc-800" />;
+                        return <div key={idx} className="glance-menu-sep" />;
                       }
                       return (
                         <button
                           key={idx}
                           onClick={item.action}
-                          className="group flex w-full cursor-pointer items-center justify-between gap-6 px-3 py-1.5 text-left text-[12px] whitespace-nowrap hover:bg-sky-600 hover:text-white transition-colors"
+                          className="glance-menu-item"
                         >
                           <span className="shrink-0 whitespace-nowrap">{item.label}</span>
                           {item.shortcut && (
-                            <span className="ml-auto shrink-0 pl-4 text-[11px] text-zinc-400 group-hover:text-white whitespace-nowrap font-mono">
+                            <span className="glance-menu-shortcut pl-4">
                               {item.shortcut}
                             </span>
                           )}

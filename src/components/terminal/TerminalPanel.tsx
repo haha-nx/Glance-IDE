@@ -10,6 +10,7 @@ import {
   type TerminalEvent,
 } from "../../services/terminal";
 import { tabsStore } from "../../stores/tabs";
+import { contextMenuStore } from "../../stores/contextMenu";
 import { explorerStore } from "../../stores/explorer";
 import { settingsStore } from "../../stores/settings";
 import { parseProblems, resolveProblemPath, type Problem } from "../../lib/problems";
@@ -1056,6 +1057,20 @@ export function TerminalPanel({
                           key={t.id}
                           data-term-tab-id={t.id}
                           onPointerDown={(e) => onTabPointerDown(e, t.id, pane.id, t.title)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            contextMenuStore.getState().open(e.clientX, e.clientY, [
+                              {
+                                label: "关闭终端",
+                                action: () => closeTerminal(t.id),
+                              },
+                              {
+                                label: "新建终端",
+                                action: () => void createTerminalForCurrentDevice(pane.id),
+                              },
+                            ]);
+                          }}
                           className={`group flex items-center gap-1.5 rounded px-2.5 py-1 cursor-pointer transition-colors shrink-0 ${
                             isActive
                               ? "bg-zinc-800 text-sky-300 font-medium shadow-sm"
@@ -1096,6 +1111,54 @@ export function TerminalPanel({
                   {/* 窗格终端画布区 */}
                   <div
                     data-term-body-pane={pane.id}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setActivePaneId(pane.id);
+                      const hasSelection = Boolean(activeItem?.term.hasSelection());
+                      contextMenuStore.getState().open(e.clientX, e.clientY, [
+                        {
+                          label: "复制",
+                          disabled: !hasSelection,
+                          action: () => {
+                            if (!activeItem) return;
+                            const text = activeItem.term.getSelection();
+                            if (text && navigator.clipboard?.writeText) {
+                              void navigator.clipboard.writeText(text).catch(() => {});
+                            }
+                            activeItem.term.focus();
+                          },
+                        },
+                        {
+                          label: "粘贴",
+                          disabled: !activeItem,
+                          action: async () => {
+                            if (!activeItem) return;
+                            try {
+                              const text = await navigator.clipboard.readText();
+                              if (text) void terminalApi.write(activeItem.channelId, text);
+                            } catch {
+                              /* 剪贴板读取失败时忽略 */
+                            }
+                            activeItem.term.focus();
+                          },
+                        },
+                        { type: "separator" },
+                        {
+                          label: "清空终端",
+                          disabled: !activeItem,
+                          action: () => {
+                            if (!activeItem) return;
+                            activeItem.term.clear();
+                            activeItem.term.focus();
+                          },
+                        },
+                        {
+                          label: "新建终端",
+                          action: () => void createTerminalForCurrentDevice(pane.id),
+                        },
+                      ]);
+                    }}
                     className="relative min-h-0 flex-1 w-full h-full overflow-hidden bg-[var(--glance-bg-terminal)]"
                   >
                     {paneTabs.length === 0 ? (

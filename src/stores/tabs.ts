@@ -80,6 +80,8 @@ interface TabsState {
   activeGroupId: string;
   /** 待确认关闭的脏标签 */
   pendingCloseId: string | null;
+  /** 批量关闭时的后续待确认脏标签队列 */
+  pendingCloseQueue: string[];
   /** 保存冲突弹窗状态 */
   pendingConflict: SaveConflict | null;
   saving: boolean;
@@ -115,6 +117,12 @@ interface TabsState {
   activateInGroup(groupId: string, uri: string): void;
   /** 在分组内关闭标签：其他分组仍打开该文件时仅从本组移除，否则走全局关闭流程 */
   closeInGroup(groupId: string, uri: string): void;
+  /** 批量关闭指定分组内一组标签：干净标签与跨分屏标签立即关闭，多个脏标签依次排队确认 */
+  closeTabsInGroup(groupId: string, targetUris: string[]): void;
+  /** 关闭同组内除指定标签外的其他所有文件 */
+  closeOtherTabsInGroup(groupId: string, keepUri: string): void;
+  /** 关闭同组内所有文件 */
+  closeAllTabsInGroup(groupId: string): void;
   /** 移动标签到目标分组（同组即重排） */
   moveTab(uri: string, fromGroupId: string, toGroupId: string, index?: number): void;
   /** 拖拽/按钮拆分：在目标分组的某一侧新建分组并放入该标签 */
@@ -337,6 +345,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
   layout: [{ id: "col-main", rows: [INITIAL_GROUP] }],
   activeGroupId: INITIAL_GROUP,
   pendingCloseId: null,
+  pendingCloseQueue: [],
   pendingConflict: null,
   saving: false,
   pendingReveal: null,
@@ -536,7 +545,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
   requestClose: (uri) => {
     const tab = get().tabs.find((t) => t.uri === uri);
     if (tab?.dirty) {
-      set({ pendingCloseId: uri });
+      set({ pendingCloseId: uri, pendingCloseQueue: [] });
     } else {
       void get().confirmClose(uri, true);
     }
@@ -558,17 +567,43 @@ export const tabsStore = create<TabsState>()((set, get) => ({
         const r = removeWithNeighbor(g.tabUris, uri, g.activeUri);
         groups[gid] = { ...g, tabUris: r.list, activeUri: r.active };
       }
+
+      const remaining = s.pendingCloseQueue.filter(
+        (u) => u !== uri && tabs.some((t) => t.uri === u && t.dirty),
+      );
+      if (remaining.length > 0) {
+        const nextPending = remaining[0];
+        const nextQueue = remaining.slice(1);
+        let nextGroupId = s.activeGroupId;
+        if (!groups[nextGroupId]?.tabUris.includes(nextPending)) {
+          const holder = Object.values(groups).find((g) => g.tabUris.includes(nextPending));
+          if (holder) nextGroupId = holder.id;
+        }
+        if (groups[nextGroupId]?.tabUris.includes(nextPending)) {
+          groups[nextGroupId] = { ...groups[nextGroupId], activeUri: nextPending };
+        }
+        return {
+          tabs,
+          groups,
+          activeGroupId: nextGroupId,
+          activeId: groups[nextGroupId]?.activeUri ?? null,
+          pendingCloseId: nextPending,
+          pendingCloseQueue: nextQueue,
+        };
+      }
+
       return {
         tabs,
         groups,
         activeId: groups[s.activeGroupId]?.activeUri ?? null,
         pendingCloseId: null,
+        pendingCloseQueue: [],
       };
     });
     return true;
   },
 
-  cancelClose: () => set({ pendingCloseId: null }),
+  cancelClose: () => set({ pendingCloseId: null, pendingCloseQueue: [] }),
 
   saveTab: async (uri, overwrite = false) => {
     if (get().saving) return false; // 防止快捷键双通道并发保存
@@ -669,6 +704,102 @@ export const tabsStore = create<TabsState>()((set, get) => ({
       return;
     }
     get().requestClose(uri);
+  },
+
+  closeTabsInGroup: (groupId, targetUris) => {
+    const s = get();
+    const group = s.groups[groupId];
+    if (!group || targetUris.length === 0) return;
+
+    const targetSet = new Set(targetUris);
+    const orderedTargets = group.tabUris.filter((u) => targetSet.has(u));
+    if (orderedTargets.length === 0) return;
+
+    const detachOnly: string[] = [];
+    const closeNow: string[] = [];
+    const dirtyQueue: string[] = [];
+
+    for (const uri of orderedTargets) {
+      const holders = Object.values(s.groups).filter((g) => g.tabUris.includes(uri));
+      if (holders.length > 1) {
+        detachOnly.push(uri);
+        continue;
+      }
+      const tab = s.tabs.find((t) => t.uri === uri);
+      if (tab?.dirty) {
+        dirtyQueue.push(uri);
+      } else {
+        closeNow.push(uri);
+      }
+    }
+
+    const removeFromGroupSet = new Set([...detachOnly, ...closeNow]);
+    const closeNowSet = new Set(closeNow);
+
+    set((cur) => {
+      const curGroup = cur.groups[groupId];
+      if (!curGroup) return {};
+
+      let nextList = curGroup.tabUris;
+      let nextActive = curGroup.activeUri;
+      for (const uri of orderedTargets) {
+        if (!removeFromGroupSet.has(uri)) continue;
+        const r = removeWithNeighbor(nextList, uri, nextActive);
+        nextList = r.list;
+        nextActive = r.active;
+      }
+
+      const tabs = cur.tabs.filter((t) => !closeNowSet.has(t.uri));
+      const groups: Record<string, EditorGroup> = {
+        ...cur.groups,
+        [groupId]: {
+          ...curGroup,
+          tabUris: nextList,
+          activeUri: nextActive,
+        },
+      };
+
+      const validDirtyQueue = dirtyQueue.filter(
+        (u) => nextList.includes(u) && tabs.some((t) => t.uri === u && t.dirty),
+      );
+      if (validDirtyQueue.length > 0) {
+        const firstDirty = validDirtyQueue[0];
+        groups[groupId] = { ...groups[groupId], activeUri: firstDirty };
+        return {
+          tabs,
+          groups,
+          activeGroupId: groupId,
+          activeId: firstDirty,
+          pendingCloseId: firstDirty,
+          pendingCloseQueue: validDirtyQueue.slice(1),
+        };
+      }
+
+      return {
+        tabs,
+        groups,
+        activeId: groups[cur.activeGroupId]?.activeUri ?? null,
+      };
+    });
+
+    for (const uri of closeNow) {
+      disposeModel(uri);
+    }
+  },
+
+  closeOtherTabsInGroup: (groupId, keepUri) => {
+    const g = get().groups[groupId];
+    if (!g) return;
+    get().closeTabsInGroup(
+      groupId,
+      g.tabUris.filter((u) => u !== keepUri),
+    );
+  },
+
+  closeAllTabsInGroup: (groupId) => {
+    const g = get().groups[groupId];
+    if (!g) return;
+    get().closeTabsInGroup(groupId, [...g.tabUris]);
   },
 
   moveTab: (uri, fromGroupId, toGroupId, index) => {
@@ -776,6 +907,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
         groups,
         activeId: s.activeId ? mapUri(s.activeId) : null,
         pendingCloseId: s.pendingCloseId ? mapUri(s.pendingCloseId) : null,
+        pendingCloseQueue: s.pendingCloseQueue.map(mapUri),
         pendingReveal: s.pendingReveal
           ? { ...s.pendingReveal, uri: mapUri(s.pendingReveal.uri) }
           : null,
@@ -832,6 +964,7 @@ export const tabsStore = create<TabsState>()((set, get) => ({
         tabs,
         groups,
         activeId: groups[s.activeGroupId]?.activeUri ?? null,
+        pendingCloseQueue: s.pendingCloseQueue.filter((u) => !staleSet.has(u)),
       };
     });
   },

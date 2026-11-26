@@ -31,6 +31,16 @@ html[data-theme="dark"] {
   --glance-warning-text: #fcd34d;
   --glance-highlight-bg: rgba(245, 158, 11, 0.28);
   --glance-highlight-text: #fde68a;
+  --glance-menu-bg: #232327;
+  --glance-menu-border: #3f3f46;
+  --glance-menu-text: #e4e4e7;
+  --glance-menu-muted: #a1a1aa;
+  --glance-menu-hover-bg: #0284c7;
+  --glance-menu-hover-text: #ffffff;
+  --glance-menu-sep: #323238;
+  --glance-menu-danger: #f87171;
+  --glance-menu-danger-hover-bg: #dc2626;
+  --glance-menu-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   color-scheme: dark;
 }
 
@@ -51,6 +61,16 @@ html[data-theme="midnight"] {
   --glance-quote-border: #334155;
   --glance-scrollbar: #334155;
   --glance-scrollbar-hover: #475569;
+  --glance-menu-bg: #1e293b;
+  --glance-menu-border: #334155;
+  --glance-menu-text: #e2e8f0;
+  --glance-menu-muted: #94a3b8;
+  --glance-menu-hover-bg: #0284c7;
+  --glance-menu-hover-text: #ffffff;
+  --glance-menu-sep: #2c3a4f;
+  --glance-menu-danger: #f87171;
+  --glance-menu-danger-hover-bg: #dc2626;
+  --glance-menu-shadow: 0 12px 32px rgba(2, 6, 23, 0.55);
 
   --color-zinc-50: #f8fafc;
   --color-zinc-100: #f1f5f9;
@@ -83,6 +103,16 @@ html[data-theme="nord"] {
   --glance-quote-border: #4c566a;
   --glance-scrollbar: #4c566a;
   --glance-scrollbar-hover: #616e88;
+  --glance-menu-bg: #3b4252;
+  --glance-menu-border: #4c566a;
+  --glance-menu-text: #e5e9f0;
+  --glance-menu-muted: #b2bdd0;
+  --glance-menu-hover-bg: #5e81ac;
+  --glance-menu-hover-text: #eceff4;
+  --glance-menu-sep: #434c5e;
+  --glance-menu-danger: #bf616a;
+  --glance-menu-danger-hover-bg: #bf616a;
+  --glance-menu-shadow: 0 12px 32px rgba(20, 24, 31, 0.5);
 
   --color-zinc-50: #f8fafc;
   --color-zinc-100: #eceff4;
@@ -130,6 +160,16 @@ html[data-theme="light"] {
   --glance-warning-text: #b45309;
   --glance-highlight-bg: #fde68a;
   --glance-highlight-text: #78350f;
+  --glance-menu-bg: #ffffff;
+  --glance-menu-border: #cbd5e1;
+  --glance-menu-text: #18181b;
+  --glance-menu-muted: #64748b;
+  --glance-menu-hover-bg: #0284c7;
+  --glance-menu-hover-text: #ffffff;
+  --glance-menu-sep: #e2e8f0;
+  --glance-menu-danger: #dc2626;
+  --glance-menu-danger-hover-bg: #dc2626;
+  --glance-menu-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
 
   --color-zinc-50: #020617;
   --color-zinc-100: #09090b;
@@ -329,4 +369,73 @@ body,
   word-break: break-word;
   pointer-events: none;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* 统一自定义右键菜单与下拉菜单（配色随 4 套主题 CSS 变量切换） */
+@layer components {
+  .glance-menu {
+    background-color: var(--glance-menu-bg);
+    color: var(--glance-menu-text);
+    border: 1px solid var(--glance-menu-border);
+    border-radius: 0.5rem;
+    padding: 0.25rem 0;
+    box-shadow: var(--glance-menu-shadow);
+    user-select: none;
+  }
+
+  .glance-menu-item {
+    display: flex;
+    width: 100%;
+    cursor: pointer;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding: 0.375rem 0.75rem;
+    text-align: left;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    color: var(--glance-menu-text);
+    transition: background-color 80ms ease, color 80ms ease;
+  }
+
+  .glance-menu-item:hover:not(:disabled) {
+    background-color: var(--glance-menu-hover-bg);
+    color: var(--glance-menu-hover-text);
+  }
+
+  .glance-menu-item:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+  }
+
+  .glance-menu-item-muted,
+  .glance-menu-shortcut {
+    margin-left: auto;
+    flex-shrink: 0;
+    color: var(--glance-menu-muted);
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    white-space: nowrap;
+  }
+
+  .glance-menu-item:hover:not(:disabled) .glance-menu-item-muted,
+  .glance-menu-item:hover:not(:disabled) .glance-menu-shortcut {
+    color: var(--glance-menu-hover-text);
+    opacity: 0.9;
+  }
+
+  .glance-menu-item-danger {
+    color: var(--glance-menu-danger);
+  }
+
+  .glance-menu-item-danger:hover:not(:disabled) {
+    background-color: var(--glance-menu-danger-hover-bg);
+    color: #ffffff;
+  }
+
+  .glance-menu-sep {
+    margin: 0.25rem 0;
+    border-top: 1px solid var(--glance-menu-sep);
+  }
 }

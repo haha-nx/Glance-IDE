@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { explorerStore, joinChildPath } from "../../stores/explorer";
+import { contextMenuStore, type ContextMenuEntry } from "../../stores/contextMenu";
 import { settingsStore } from "../../stores/settings";
 import { sshReconnectStore } from "../../stores/sshReconnect";
 import { tabsStore } from "../../stores/tabs";
@@ -27,13 +28,6 @@ type Dialog =
   | { kind: "delete"; path: string; name: string; isDir: boolean }
   | null;
 
-interface ContextMenuState {
-  /** null 表示在目录树空白处右键，作用于根目录 */
-  entry: FileEntryDto | null;
-  x: number;
-  y: number;
-}
-
 export function ExplorerPanel() {
   const rootPath = explorerStore((s) => s.rootPath);
   const rootError = explorerStore((s) => s.rootError);
@@ -46,20 +40,8 @@ export function ExplorerPanel() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [dropTargetDir, setDropTargetDir] = useState<string | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
-
-  // 点击其他位置关闭右键菜单
-  useEffect(() => {
-    if (!menu) return;
-    const close = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenu(null);
-    };
-    window.addEventListener("mousedown", close);
-    return () => window.removeEventListener("mousedown", close);
-  }, [menu]);
 
   // 监听操作系统级外部文件/文件夹拖拽事件（Tauri webview 原生拖拽通道）
   useEffect(() => {
@@ -143,7 +125,7 @@ export function ExplorerPanel() {
   }
 
   function openDialog(d: Exclude<Dialog, null>) {
-    setMenu(null);
+    contextMenuStore.getState().close();
     setInput(d.kind === "rename" ? d.name : "");
     setDialog(d);
   }
@@ -154,45 +136,75 @@ export function ExplorerPanel() {
     return explorerStore.getState().parentOf(entry.path) ?? rootPath ?? "";
   }
 
-  function menuAction(action: string) {
-    if (!menu || !rootPath) return;
-    const { entry } = menu;
+  function openExplorerContextMenu(entry: FileEntryDto | null, x: number, y: number) {
+    if (!rootPath) return;
     const parentDir = targetDirForMenu(entry);
-    setMenu(null);
+    const items: ContextMenuEntry[] = [];
 
-    switch (action) {
-      case "newFile":
-        openDialog({ kind: "newFile", parent: parentDir });
-        break;
-      case "newFolder":
-        openDialog({ kind: "newFolder", parent: parentDir });
-        break;
-      case "uploadFiles":
-        void pickAndUpload(false, parentDir);
-        break;
-      case "uploadFolder":
-        void pickAndUpload(true, parentDir);
-        break;
-      case "download":
-        if (entry) void transferStore.getState().downloadEntry(entry);
-        break;
-      case "rename":
-        if (entry) openDialog({ kind: "rename", path: entry.path, name: entry.name });
-        break;
-      case "delete":
-        if (entry) {
-          openDialog({
-            kind: "delete",
-            path: entry.path,
-            name: entry.name,
-            isDir: entry.kind === "dir",
-          });
-        }
-        break;
-      case "refresh":
-        void explorerStore.getState().refresh(parentDir);
-        break;
+    if (!entry || entry.kind === "dir") {
+      items.push(
+        {
+          label: "新建文件",
+          action: () => openDialog({ kind: "newFile", parent: parentDir }),
+        },
+        {
+          label: "新建文件夹",
+          action: () => openDialog({ kind: "newFolder", parent: parentDir }),
+        },
+        { type: "separator" },
+      );
     }
+
+    items.push(
+      {
+        label: entry?.kind === "dir" ? "上传文件到此目录…" : "上传文件到此所在目录…",
+        action: () => void pickAndUpload(false, parentDir),
+      },
+      {
+        label: entry?.kind === "dir" ? "上传文件夹到此目录…" : "上传文件夹到此所在目录…",
+        action: () => void pickAndUpload(true, parentDir),
+      },
+    );
+
+    if (entry) {
+      items.push({
+        label: entry.kind === "dir" ? "下载此文件夹…" : "下载此文件…",
+        action: () => void transferStore.getState().downloadEntry(entry),
+      });
+    }
+
+    items.push({ type: "separator" });
+
+    if (entry) {
+      items.push({
+        label: "重命名",
+        action: () => openDialog({ kind: "rename", path: entry.path, name: entry.name }),
+      });
+    }
+
+    items.push({
+      label: "刷新",
+      action: () => void explorerStore.getState().refresh(parentDir),
+    });
+
+    if (entry) {
+      items.push(
+        { type: "separator" },
+        {
+          label: "删除",
+          danger: true,
+          action: () =>
+            openDialog({
+              kind: "delete",
+              path: entry.path,
+              name: entry.name,
+              isDir: entry.kind === "dir",
+            }),
+        },
+      );
+    }
+
+    contextMenuStore.getState().open(x, y, items);
   }
 
   async function submitDialog() {
@@ -251,8 +263,6 @@ export function ExplorerPanel() {
     }
   }
 
-  const menuItemClass =
-    "block w-full px-3 py-1.5 text-left text-sm text-zinc-200 transition-colors hover:bg-zinc-700";
   const toolbarBtnClass =
     "flex h-6 w-6 items-center justify-center rounded text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200";
 
@@ -336,7 +346,8 @@ export function ExplorerPanel() {
             data-drop-dir={rootPath}
             onContextMenu={(e) => {
               e.preventDefault();
-              setMenu({ entry: null, x: e.clientX, y: e.clientY });
+              e.stopPropagation();
+              openExplorerContextMenu(null, e.clientX, e.clientY);
             }}
             className={`relative flex-1 overflow-y-auto pb-2 transition-colors ${
               dropTargetDir === rootPath
@@ -351,7 +362,7 @@ export function ExplorerPanel() {
                 dirPath={rootPath}
                 depth={0}
                 dropTargetDir={dropTargetDir}
-                onContextMenu={(entry, x, y) => setMenu({ entry, x, y })}
+                onContextMenu={(entry, x, y) => openExplorerContextMenu(entry, x, y)}
               />
             )}
             {dropTargetDir && (
@@ -363,60 +374,6 @@ export function ExplorerPanel() {
 
           <TransferQueuePanel />
         </>
-      )}
-
-      {menu && (
-        <div
-          ref={menuRef}
-          className="fixed z-50 min-w-44 rounded-md border border-zinc-700 bg-zinc-800 py-1 shadow-xl"
-          style={{
-            left: Math.min(menu.x, window.innerWidth - 190),
-            top: Math.min(menu.y, window.innerHeight - 280),
-          }}
-        >
-          {(!menu.entry || menu.entry.kind === "dir") && (
-            <>
-              <button className={menuItemClass} onClick={() => menuAction("newFile")}>
-                新建文件
-              </button>
-              <button className={menuItemClass} onClick={() => menuAction("newFolder")}>
-                新建文件夹
-              </button>
-              <div className="my-1 border-t border-zinc-700" />
-            </>
-          )}
-          <button className={menuItemClass} onClick={() => menuAction("uploadFiles")}>
-            {menu.entry?.kind === "dir" ? "上传文件到此目录…" : "上传文件到此所在目录…"}
-          </button>
-          <button className={menuItemClass} onClick={() => menuAction("uploadFolder")}>
-            {menu.entry?.kind === "dir" ? "上传文件夹到此目录…" : "上传文件夹到此所在目录…"}
-          </button>
-          {menu.entry && (
-            <button className={menuItemClass} onClick={() => menuAction("download")}>
-              {menu.entry.kind === "dir" ? "下载此文件夹…" : "下载此文件…"}
-            </button>
-          )}
-          <div className="my-1 border-t border-zinc-700" />
-          {menu.entry && (
-            <button className={menuItemClass} onClick={() => menuAction("rename")}>
-              重命名
-            </button>
-          )}
-          <button className={menuItemClass} onClick={() => menuAction("refresh")}>
-            刷新
-          </button>
-          {menu.entry && (
-            <>
-              <div className="my-1 border-t border-zinc-700" />
-              <button
-                className="block w-full px-3 py-1.5 text-left text-sm text-red-400 transition-colors hover:bg-zinc-700"
-                onClick={() => menuAction("delete")}
-              >
-                删除
-              </button>
-            </>
-          )}
-        </div>
       )}
 
       {dialog && (
